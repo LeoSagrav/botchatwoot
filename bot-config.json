@@ -1,0 +1,53 @@
+{
+  "menus": {
+    "principal": {
+      "greeting": "¡Hola! 👋 Bienvenido a Importadora\n\n¿En qué puedo ayudarte? Responde con el número:\n\n1️⃣ Saber ubicación\n2️⃣ Realizar pedidos\n3️⃣ Hablar con un asesor",
+      "options": {
+        "1": {
+          "message": "📍 *Nuestra Ubicación:*\n\nAv. Principal #123, Zona Centro\nCiudad, Bolivia\n\n🕐 Horario de atención:\nLunes a Viernes: 9:00 - 18:00\nSábados: 9:00 - 13:00\n\n🗺️ Ver en mapa: https://maps.google.com/?q=Av+Principal+123",
+          "end": true,
+          "showMenuAgain": true
+        },
+        "2": {
+          "message": "🛒 *Realizar Pedidos:*\n\nElige una opción:\n\n1️⃣ Ver catálogo de productos\n2️⃣ Consultar estado de mi pedido\n3️⃣ Volver al menú principal",
+          "submenu": "pedidos"
+        },
+        "3": {
+          "message": "👤 Entendido. Transfiriendo tu conversación a un asesor humano...\n\n*Un miembro de nuestro equipo te atenderá en los próximos minutos.*",
+          "handoff": true,
+          "end": true
+        }
+      }
+    },
+    "pedidos": {
+      "options": {
+        "1": {
+          "message": "📋 *Catálogo de Productos:*\n\nVisita nuestro catálogo online:\n👉 https://catalogo.importadoramiranda.com\n\nO escribe el nombre del producto que buscas y un asesor te ayudará.",
+          "end": true,
+          "showMenuAgain": true
+        },
+        "2": {
+          "message": "🔍 *Consultar Estado de Pedido:*\n\nPor favor, envíanos tu *número de orden* o *cédula de identidad* para buscar tu pedido.\n\n_Un asesor verificará tu información y te responderá en breve._",
+          "handoff": true,
+          "end": true
+        },
+        "3": {
+          "message": "🏠 Volviendo al menú principal...",
+          "backTo": "principal",
+          "end": false
+        }
+      }
+    }
+  },
+  "keywords": {
+    "greeting": ["hola", "hi", "buenos días", "buenas tardes", "buenas noches", "inicio", "menú", "menu", "start"],
+    "back": ["atrás", "regresar", "back", "volver", "vuelta", "principal"],
+    "handoff": ["asesor", "humano", "persona", "ayuda", "soporte", "atención", "hablar", "operador"],
+    "cancel": ["cancelar", "salir", "fin", "stop", "detener"]
+  },
+  "messages": {
+    "unrecognized": "❌ No entendí tu respuesta.\n\nPor favor elige una opción válida:\n\n1️⃣ Ubicación\n2️⃣ Pedidos\n3️⃣ Asesor",
+    "handoffConfirmation": "✅ Conversación transferida a un asesor humano. Te atenderemos pronto.",
+    "sessionExpired": "🔄 Tu sesión ha expirado. Escribe *'hola'* para comenzar de nuevo."
+  }
+}
