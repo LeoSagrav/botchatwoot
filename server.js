@@ -5,7 +5,7 @@ const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
 
-const { getState, setState, clearState } = require('./utils/conversation-state');
+const { getState, setState, clearState, markAsHandoff, isHandedOff, releaseHandoff } = require('./utils/conversation-state');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -69,6 +69,12 @@ app.post('/webhook/chatwoot', async (req, res) => {
       return res.sendStatus(200);
     }
 
+    // 🔥 VERIFICAR SI YA FUE TRANSFERIDA A HUMANO
+    if (isHandedOff(accountId, conversationId)) {
+      console.log(`⏭️ Conversación ${conversationId} ya está con asesor humano - Bot ignorando`);
+      return res.sendStatus(200);  // ✅ No responde, solo confirma recepción
+    }
+
     console.log(`💬 Procesando: "${cleanContent}"`);
 
     // Estado de conversación
@@ -77,44 +83,49 @@ app.post('/webhook/chatwoot', async (req, res) => {
 
     // === PALABRAS CLAVE ===
     
-    // Handoff
+    // Handoff - Transferir a asesor humano
     if (botConfig.keywords.handoff.some(k => message.includes(k))) {
-      console.log('✅ Handoff');
+      console.log('✅ Handoff solicitado');
       await sendHandoff(accountId, conversationId, contactId);
-      clearState(accountId, conversationId);
       return res.sendStatus(200);
     }
 
-    // Volver al menú
+    // Volver al menú principal
     if (botConfig.keywords.back.some(k => message.includes(k))) {
-      console.log('✅ Menú principal');
+      console.log('✅ Volviendo al menú principal');
       state.menu = 'principal';
       setState(accountId, conversationId, state);
       await sendMessage(accountId, conversationId, botConfig.menus.principal.greeting);
       return res.sendStatus(200);
     }
 
-    // Saludo
+    // Saludo - Permite reiniciar incluso después de handoff
     if (botConfig.keywords.greeting.some(k => message.includes(k))) {
-      console.log('✅ Saludo');
+      console.log('✅ Saludo detectado');
+      
+      // Si estaba en handoff, liberar para que el bot vuelva a responder
+      if (isHandedOff(accountId, conversationId)) {
+        releaseHandoff(accountId, conversationId);
+        console.log('🔄 Handoff liberado por saludo del cliente');
+      }
+      
       state.menu = 'principal';
       setState(accountId, conversationId, state);
       await sendMessage(accountId, conversationId, botConfig.menus.principal.greeting);
       return res.sendStatus(200);
     }
 
-    // === MENÚ ===
+    // === PROCESAR MENÚ ===
     const currentMenu = botConfig.menus[state.menu];
     
     if (currentMenu?.options?.[message]) {
-      console.log(`✅ Opción "${message}"`);
+      console.log(`✅ Opción "${message}" del menú "${state.menu}"`);
       const option = currentMenu.options[message];
       
       await sendMessage(accountId, conversationId, option.message);
       
       if (option.handoff) {
         await sendHandoff(accountId, conversationId, contactId);
-        clearState(accountId, conversationId);
       } else if (option.backTo) {
         state.menu = option.backTo;
         setState(accountId, conversationId, state);
@@ -131,7 +142,7 @@ app.post('/webhook/chatwoot', async (req, res) => {
         clearState(accountId, conversationId);
       }
     } else {
-      console.log('❌ No reconocido');
+      console.log('❌ Mensaje no reconocido');
       await sendMessage(accountId, conversationId, botConfig.messages.unrecognized);
       state.menu = 'principal';
       setState(accountId, conversationId, state);
@@ -141,13 +152,14 @@ app.post('/webhook/chatwoot', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error:', error.message);
+    console.error('Stack:', error.stack);
     res.sendStatus(500);
   }
 });
 
-// Enviar mensaje
+// Enviar mensaje a Chatwoot
 async function sendMessage(accountId, conversationId, content) {
-  console.log(`📤 Enviando a conv ${conversationId}`);
+  console.log(`📤 Enviando mensaje a conv ${conversationId}`);
   
   try {
     const response = await axios.post(
@@ -165,27 +177,32 @@ async function sendMessage(accountId, conversationId, content) {
         timeout: 10000
       }
     );
-    console.log('✅ Enviado (status:', response.status + ')');
+    console.log('✅ Mensaje enviado (status:', response.status + ')');
     return response;
   } catch (error) {
-    console.error('❌ Error enviando:');
+    console.error('❌ Error enviando mensaje:');
     console.error('  Status:', error.response?.status);
     console.error('  Data:', error.response?.data);
     throw error;
   }
 }
 
-// Handoff
+// Handoff a asesor humano
 async function sendHandoff(accountId, conversationId, contactId) {
-  console.log('👤 Handoff...');
+  console.log('👤 Realizando handoff a asesor humano...');
   
   try {
+    // 🔥 MARCAR conversación como handoff (para que el bot ignore futuros mensajes)
+    markAsHandoff(accountId, conversationId);
+    
+    // Enviar mensaje de confirmación al cliente
     await sendMessage(accountId, conversationId, botConfig.messages.handoffConfirmation);
     
+    // Agregar nota privada para el equipo
     await axios.post(
       `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
       {
-        content: `🤖 Bot: Cliente ${contactId} solicitó asesor.`,
+        content: `🤖 *Bot:* Cliente ${contactId} solicitó atención humana. *El bot ha dejado de responder automáticamente.*`,
         message_type: 'note',
         private: true
       },
@@ -197,9 +214,18 @@ async function sendHandoff(accountId, conversationId, contactId) {
       }
     );
     
+    // Marcar conversación como prioritaria y con atributos personalizados
     await axios.patch(
       `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
-      { status: 'open', priority: 'high' },
+      { 
+        status: 'open', 
+        priority: 'high',
+        custom_attributes: { 
+          handled_by_bot: false, 
+          requires_human: true,
+          handoff_at: new Date().toISOString()
+        }
+      },
       {
         headers: {
           'api_access_token': process.env.CHATWOOT_TOKEN,
@@ -208,16 +234,21 @@ async function sendHandoff(accountId, conversationId, contactId) {
       }
     );
     
-    console.log('✅ Handoff OK');
+    console.log('✅ Handoff completado - Bot dejará de responder');
   } catch (error) {
-    console.error('❌ Error handoff:', error.message);
+    console.error('❌ Error en handoff:', error.message);
   }
 }
 
-// Iniciar
+// Iniciar servidor
 app.listen(PORT, () => {
-  console.log('\n🤖 Bot en puerto ' + PORT);
-  console.log('📡 Webhook: /webhook/chatwoot');
+  console.log('\n🤖 Bot de Chatwoot corriendo en puerto ' + PORT);
+  console.log('📡 Webhook URL: /webhook/chatwoot');
   console.log('🔗 Chatwoot: ' + process.env.CHATWOOT_URL);
-  console.log('✅ Health: http://localhost:' + PORT + '/health\n');
+  console.log('✅ Health check: http://localhost:' + PORT + '/health');
+  console.log('\n⚙️ Configuración:');
+  console.log('  Account ID:', process.env.CHATWOOT_ACCOUNT_ID);
+  console.log('  Token:', process.env.CHATWOOT_TOKEN ? 'Configurado (' + process.env.CHATWOOT_TOKEN.substring(0, 10) + '...)' : 'NO CONFIGURADO');
+  console.log('  Bot Name:', process.env.BOT_NAME);
+  console.log('\n🎯 Listo para recibir mensajes...\n');
 });
