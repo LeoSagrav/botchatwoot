@@ -33,46 +33,267 @@ app.get('/health', (req, res) => {
   });
 });
 
+// 🔥 Función para enviar imagen + texto de pago QR
+// 🔥 Función para enviar imagen + texto de pago QR
+async function sendQRPaymentFlow(accountId, conversationId) {
+  console.log(`🖼️ Enviando QR + mensaje de pago a conv ${conversationId}`);
+  
+  try {
+    const qrConfig = botConfig.media?.qrPayment;
+    
+    if (!qrConfig?.url) {
+      console.error('❌ URL del QR no configurada');
+      return;
+    }
+
+    // 🔥 Limpiar URL (quitar espacios en blanco)
+    const cleanUrl = qrConfig.url.trim();
+    console.log(`🔗 URL del QR: ${cleanUrl}`);
+
+    // Paso 1: Enviar la imagen del QR
+    // ✅ Formato CORRECTO para Chatwoot: remote_file_url para URLs remotas
+    try {
+      await axios.post(
+        `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+        {
+          content: qrConfig.caption || '📱 Código QR para pago',
+          message_type: 'outgoing',
+          private: false,
+          attachments: [
+            {
+              remote_file_url: cleanUrl  // ✅ Usar remote_file_url en lugar de file_url
+            }
+          ]
+        },
+        {
+          headers: {
+            'api_access_token': process.env.CHATWOOT_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
+        }
+      );
+      console.log('✅ Imagen QR enviada correctamente');
+      
+    } catch (imageError) {
+      console.error('⚠️ Error enviando imagen, intentando método alternativo...');
+      
+      // 🔥 MÉTODO ALTERNATIVO: Descargar imagen y enviar como archivo
+      try {
+        const imageResponse = await axios.get(cleanUrl, {
+          responseType: 'arraybuffer',
+          timeout: 10000
+        });
+        
+        const imageBuffer = Buffer.from(imageResponse.data);
+        const contentType = imageResponse.headers['content-type'] || 'image/jpeg';
+        
+        // Crear FormData para upload
+        const FormData = require('form-data');
+        const form = new FormData();
+        form.append('content', qrConfig.caption || '📱 Código QR para pago');
+        form.append('message_type', 'outgoing');
+        form.append('private', 'false');
+        form.append('attachments[]', imageBuffer, {
+          filename: 'qr-miranda.jpg',
+          contentType: contentType
+        });
+        
+        await axios.post(
+          `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+          form,
+          {
+            headers: {
+              'api_access_token': process.env.CHATWOOT_TOKEN,
+              ...form.getHeaders()
+            },
+            timeout: 15000
+          }
+        );
+        console.log('✅ Imagen QR enviada como archivo binario');
+        
+      } catch (binaryError) {
+        console.error('❌ Error en método binario:', binaryError.message);
+        throw binaryError;
+      }
+    }
+    
+    // Pequeña pausa para asegurar orden de mensajes
+    await new Promise(resolve => setTimeout(resolve, 800));
+    
+    // Paso 2: Enviar el mensaje de texto con instrucciones
+    await axios.post(
+      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+      {
+        content: botConfig.messages.qrPayment,
+        message_type: 'outgoing',
+        private: false
+      },
+      {
+        headers: {
+          'api_access_token': process.env.CHATWOOT_TOKEN,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+    console.log('✅ Mensaje de pago enviado');
+    
+  } catch (error) {
+    console.error('❌ Error enviando QR payment:');
+    console.error('  Status:', error.response?.status);
+    console.error('  Data:', error.response?.data);
+    
+    // 🔥 Fallback final: Enviar solo texto con link
+    console.log('⚠️ Fallback: Enviando solo texto con link al QR...');
+    try {
+      const fallbackMessage = `📱 Escanea este QR para pagar tu pedido
+
+🔗 ${botConfig.media?.qrPayment?.url?.trim()}
+
+🛍️ ¡TU PEDIDO CASI ESTÁ EN CAMINO!
+
+🚛 Agenda: Los pedidos se enviarán a partir del 3 a 5 dias habiles (Recojo en La Paz por la tarde).
+
+Paga vía QR el monto de tu compra. 📲
+
+Importante: Ten listas las fotos de tus productos y tu comprobante de pago. 🧾
+
+Sube tus datos y capturas al siguiente formulario
+
+🌐 https://shop.importadoramiranda.com/live
+
+¡Tu pedido así de fácil y rápido! 🎊`;
+      
+      await sendMessage(accountId, conversationId, fallbackMessage);
+      console.log('✅ Fallback enviado correctamente');
+    } catch (fallbackError) {
+      console.error('❌ Error en fallback:', fallbackError.message);
+    }
+  }
+}
+// Función para enviar mensaje de texto normal
+async function sendMessage(accountId, conversationId, content) {
+  console.log(`📤 Enviando mensaje a conv ${conversationId}`);
+  
+  try {
+    const response = await axios.post(
+      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+      {
+        content: content,
+        message_type: 'outgoing',
+        private: false
+      },
+      {
+        headers: {
+          'api_access_token': process.env.CHATWOOT_TOKEN,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+    console.log('✅ Mensaje enviado (status:', response.status + ')');
+    return response;
+  } catch (error) {
+    console.error('❌ Error enviando mensaje:');
+    console.error('  Status:', error.response?.status);
+    console.error('  Data:', error.response?.data);
+    throw error;
+  }
+}
+
+// Handoff a asesor humano
+async function sendHandoff(accountId, conversationId, contactId) {
+  console.log('👤 Realizando handoff...');
+  
+  try {
+    markAsHandoff(accountId, conversationId);
+    
+    await sendMessage(accountId, conversationId, botConfig.messages.handoffConfirmation);
+    
+    await axios.post(
+      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+      {
+        content: `🤖 *Bot:* Cliente ${contactId} solicitó atención humana. *El bot ha dejado de responder.*`,
+        message_type: 'note',
+        private: true
+      },
+      {
+        headers: {
+          'api_access_token': process.env.CHATWOOT_TOKEN,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    await axios.patch(
+      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
+      { 
+        status: 'open', 
+        priority: 'high',
+        custom_attributes: { 
+          handled_by_bot: false, 
+          requires_human: true,
+          handoff_at: new Date().toISOString()
+        }
+      },
+      {
+        headers: {
+          'api_access_token': process.env.CHATWOOT_TOKEN,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    console.log('✅ Handoff completado');
+  } catch (error) {
+    console.error('❌ Error en handoff:', error.message);
+  }
+}
+
 // Webhook principal de Chatwoot
 app.post('/webhook/chatwoot', async (req, res) => {
   try {
-    // === EXTRAER CAMPOS (estructura real de Chatwoot) ===
+    // === EXTRAER CAMPOS ===
     const accountId = req.body.account?.id;
     const conversationId = req.body.conversation?.id;
     const message_type = req.body.message_type;
     const content = req.body.content;
     const inbox_id = req.body.inbox?.id;
     
-    // 🔑 CORRECCIÓN: sender_type está en conversation.meta.sender.type
     const sender_type = req.body.conversation?.meta?.sender?.type;
     const contactId = req.body.conversation?.meta?.sender?.id;
     
-    // Limpiar contenido
     const cleanContent = cleanText(content);
     
     console.log('\n🔔 Webhook:');
-    console.log('  account:', accountId);
     console.log('  conversation:', conversationId);
-    console.log('  message_type:', message_type);
-    console.log('  sender_type:', sender_type);
     console.log('  content:', cleanContent);
-    console.log('  inbox:', inbox_id);
 
     // Validar que sea mensaje entrante de contacto
     if (message_type !== 'incoming' || sender_type !== 'contact') {
-      console.log('⏭️ Ignorando (no es incoming/contact)');
       return res.sendStatus(200);
     }
 
     if (!cleanContent) {
-      console.log('⏭️ Ignorando (vacío)');
       return res.sendStatus(200);
     }
 
-    // 🔥 VERIFICAR SI YA FUE TRANSFERIDA A HUMANO
+    // 🔥 PRIORIDAD MÁXIMA: "miranda" EXACTO siempre ejecuta QR (incluso si hay handoff)
+    if (cleanContent === 'miranda') {
+      console.log('✅ "miranda" exacto detectado - Ejecutando QR payment (bypass handoff)');
+      await sendQRPaymentFlow(accountId, conversationId);
+      
+      // Mostrar menú nuevamente
+      await new Promise(resolve => setTimeout(resolve, 800));
+      await sendMessage(accountId, conversationId, '\n\n¿Necesitas algo más? Escribe *menú* para ver opciones.');
+      return res.sendStatus(200);
+    }
+
+    // 🔥 Verificar si ya fue transferida a humano (para todos los demás mensajes)
     if (isHandedOff(accountId, conversationId)) {
       console.log(`⏭️ Conversación ${conversationId} ya está con asesor humano - Bot ignorando`);
-      return res.sendStatus(200);  // ✅ No responde, solo confirma recepción
+      return res.sendStatus(200);
     }
 
     console.log(`💬 Procesando: "${cleanContent}"`);
@@ -90,6 +311,22 @@ app.post('/webhook/chatwoot', async (req, res) => {
       return res.sendStatus(200);
     }
 
+    // 🔥 Opción 4 del menú - Enviar QR de pago
+    if (botConfig.keywords.miranda?.includes(message) || message === 'miranda_trigger') {
+      console.log('✅ Opción 4/Miranda detectada desde menú');
+      await sendQRPaymentFlow(accountId, conversationId);
+      
+      const currentMenu = botConfig.menus[state.menu];
+      const option = currentMenu?.options?.[message] || currentMenu?.options?.['4'];
+      
+      if (option?.showMenuAgain) {
+        await new Promise(resolve => setTimeout(resolve, 800));
+        await sendMessage(accountId, conversationId, '\n\n¿Necesitas algo más? Escribe *menú* para ver opciones.');
+      }
+      clearState(accountId, conversationId);
+      return res.sendStatus(200);
+    }
+
     // Volver al menú principal
     if (botConfig.keywords.back.some(k => message.includes(k))) {
       console.log('✅ Volviendo al menú principal');
@@ -103,7 +340,6 @@ app.post('/webhook/chatwoot', async (req, res) => {
     if (botConfig.keywords.greeting.some(k => message.includes(k))) {
       console.log('✅ Saludo detectado');
       
-      // Si estaba en handoff, liberar para que el bot vuelva a responder
       if (isHandedOff(accountId, conversationId)) {
         releaseHandoff(accountId, conversationId);
         console.log('🔄 Handoff liberado por saludo del cliente');
@@ -122,7 +358,12 @@ app.post('/webhook/chatwoot', async (req, res) => {
       console.log(`✅ Opción "${message}" del menú "${state.menu}"`);
       const option = currentMenu.options[message];
       
-      await sendMessage(accountId, conversationId, option.message);
+      // Si es acción especial (como send_qr_payment)
+      if (option.action === 'send_qr_payment') {
+        await sendQRPaymentFlow(accountId, conversationId);
+      } else {
+        await sendMessage(accountId, conversationId, option.message);
+      }
       
       if (option.handoff) {
         await sendHandoff(accountId, conversationId, contactId);
@@ -157,98 +398,14 @@ app.post('/webhook/chatwoot', async (req, res) => {
   }
 });
 
-// Enviar mensaje a Chatwoot
-async function sendMessage(accountId, conversationId, content) {
-  console.log(`📤 Enviando mensaje a conv ${conversationId}`);
-  
-  try {
-    const response = await axios.post(
-      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
-      {
-        content: content,
-        message_type: 'outgoing',
-        private: false
-      },
-      {
-        headers: {
-          'api_access_token': process.env.CHATWOOT_TOKEN,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      }
-    );
-    console.log('✅ Mensaje enviado (status:', response.status + ')');
-    return response;
-  } catch (error) {
-    console.error('❌ Error enviando mensaje:');
-    console.error('  Status:', error.response?.status);
-    console.error('  Data:', error.response?.data);
-    throw error;
-  }
-}
-
-// Handoff a asesor humano
-async function sendHandoff(accountId, conversationId, contactId) {
-  console.log('👤 Realizando handoff a asesor humano...');
-  
-  try {
-    // 🔥 MARCAR conversación como handoff (para que el bot ignore futuros mensajes)
-    markAsHandoff(accountId, conversationId);
-    
-    // Enviar mensaje de confirmación al cliente
-    await sendMessage(accountId, conversationId, botConfig.messages.handoffConfirmation);
-    
-    // Agregar nota privada para el equipo
-    await axios.post(
-      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
-      {
-        content: `🤖 *Bot:* Cliente ${contactId} solicitó atención humana. *El bot ha dejado de responder automáticamente.*`,
-        message_type: 'note',
-        private: true
-      },
-      {
-        headers: {
-          'api_access_token': process.env.CHATWOOT_TOKEN,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    
-    // Marcar conversación como prioritaria y con atributos personalizados
-    await axios.patch(
-      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
-      { 
-        status: 'open', 
-        priority: 'high',
-        custom_attributes: { 
-          handled_by_bot: false, 
-          requires_human: true,
-          handoff_at: new Date().toISOString()
-        }
-      },
-      {
-        headers: {
-          'api_access_token': process.env.CHATWOOT_TOKEN,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    
-    console.log('✅ Handoff completado - Bot dejará de responder');
-  } catch (error) {
-    console.error('❌ Error en handoff:', error.message);
-  }
-}
-
 // Iniciar servidor
 app.listen(PORT, () => {
-  console.log('\n🤖 Bot de Chatwoot corriendo en puerto ' + PORT);
-  console.log('📡 Webhook URL: /webhook/chatwoot');
+  console.log('\n🤖 Bot corriendo en puerto ' + PORT);
+  console.log('📡 Webhook: /webhook/chatwoot');
   console.log('🔗 Chatwoot: ' + process.env.CHATWOOT_URL);
-  console.log('✅ Health check: http://localhost:' + PORT + '/health');
-  console.log('\n⚙️ Configuración:');
+  console.log('✅ Health: http://localhost:' + PORT + '/health\n');
+  console.log('⚙️ Configuración:');
   console.log('  Account ID:', process.env.CHATWOOT_ACCOUNT_ID);
-  console.log('  Token:', process.env.CHATWOOT_TOKEN ? 'Configurado (' + process.env.CHATWOOT_TOKEN.substring(0, 10) + '...)' : 'NO CONFIGURADO');
-  console.log('  Bot Name:', process.env.BOT_NAME);
+  console.log('  QR Payment URL:', botConfig.media?.qrPayment?.url || 'No configurado');
   console.log('\n🎯 Listo para recibir mensajes...\n');
 });
