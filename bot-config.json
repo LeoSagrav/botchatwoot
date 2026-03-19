@@ -1,7 +1,7 @@
 {
   "menus": {
     "principal": {
-      "greeting": "¡Hola! 👋 Bienvenido a Importadora Miranda\n\n¿En qué puedo ayudarte? Responde con el número:\n\n1️⃣ Saber ubicación\n2️⃣ Consultas de  pedidos\n3️⃣ Hablar con un asesor\n4️⃣ Realizar mi Pedido live",
+      "greeting": "¡Hola! 👋 Bienvenido a Importadora Miranda\n\n¿En qué puedo ayudarte? Responde con el número:\n\n1️⃣ Saber ubicación\n2️⃣ Consultas de pedidos\n3️⃣ Hablar con un asesor\n4️⃣ Realizar mi Pedido live\n5️⃣ Verificar mi pedido\n6️⃣ Lugares de envío",
       "options": {
         "1": {
           "message": "📍 *Nuestra Ubicación:*\n\nCaparazón Mall Center Planta Baja\nLocal Nº29 Pleno Puente Vita\n\n🕐 Horario: Lun-Sab 9:30-21:00\n\n🗺️ Mapa: https://shop.importadoramiranda.com/about#map-section",
@@ -9,7 +9,7 @@
           "showMenuAgain": true
         },
         "2": {
-          "message": "🛒 *Realizar Pedidos:*\n\nElige:\n\n1️⃣ Ver catálogo\n2️⃣ Consultar pedido\n3️⃣ Volver al menú",
+          "message": "🛒 *Consultas de Pedidos:*\n\nElige:\n\n1️⃣ Ver catálogo\n2️⃣ Consultar pedido\n3️⃣ Volver al menú",
           "submenu": "pedidos"
         },
         "3": {
@@ -20,6 +20,16 @@
         "4": {
           "message": "miranda_trigger",
           "action": "send_qr_payment",
+          "end": true,
+          "showMenuAgain": true
+        },
+        "5": {
+          "message": "🔍 *Verificar mi Pedido:*\n\nIngresa al siguiente enlace y escanea tu código QR:\n\n🔗 https://shop.importadoramiranda.com/qr\n\n✨ Así de fácil puedes consultar el estado de tu compra.",
+          "end": true,
+          "showMenuAgain": true
+        },
+        "6": {
+          "message": "🛍️ Descubre todos nuestros departamentos y lo que tenemos para ti\n\nExplora aquí: https://shop.importadoramiranda.com/departamentos",
           "end": true,
           "showMenuAgain": true
         }
@@ -34,8 +44,9 @@
         },
         "2": {
           "message": "🔍 *Consultar Pedido:*\nIngresa al siguiente enlace y escanea tu código QR: https://shop.importadoramiranda.com/qr",
-          "handoff": true,
-          "end": true
+          "handoff": false,
+          "end": true,
+          "showMenuAgain": true
         },
         "3": {
           "message": "🏠 Volviendo al menú...",
@@ -50,13 +61,17 @@
     "back": ["atrás", "regresar", "back", "volver", "vuelta", "principal"],
     "handoff": ["asesor", "humano", "persona", "ayuda", "soporte", "atención", "hablar", "operador"],
     "cancel": ["cancelar", "salir", "fin", "stop", "detener"],
-    "miranda": ["4"]
+    "miranda": ["4"],
+    "verificar": ["5", "verificar", "estado", "seguimiento", "mi pedido"],
+    "zonas_envio": ["6", "zonas", "envios", "departamentos", "cobertura", "dónde envían"]
   },
   "messages": {
-    "unrecognized": "❌ No entendí. Elige:\n\n1️⃣ Ubicación\n2️⃣ Consultas Pedidos\n3️⃣ Asesor\n4️⃣ Realizar mi Pedido live",
+    "unrecognized": "❌ No entendí. Elige:\n\n1️⃣ Ubicación\n2️⃣ Consultas Pedidos\n3️⃣ Asesor\n4️⃣ Realizar mi Pedido live\n5️⃣ Verificar mi pedido\n6️⃣ Lugares de envío",
     "handoffConfirmation": "✅ Transferido a un asesor. Te atenderemos pronto.",
     "sessionExpired": "🔄 Sesión expirada. Escribe *hola* para reiniciar.",
-    "qrPayment": "🛍️ ¡TU PEDIDO CASI ESTÁ EN CAMINO!\n\n🚛 Agenda: Los pedidos se enviarán a partir del 3 a 5 dias habiles (Recojo en La Paz por la tarde).\n\nPaga vía QR el monto de tu compra. 📲\n\nImportante: Ten listas las fotos de tus productos y tu comprobante de pago. 🧾\n\nSube tus datos y capturas al siguiente formulario\n\n🌐 https://shop.importadoramiranda.com/live\n\n¡Tu pedido así de fácil y rápido! 🎊"
+    "qrPayment": "🛍️ ¡TU PEDIDO CASI ESTÁ EN CAMINO!\n\n🚛 Agenda: Los pedidos se enviarán a partir del 3 a 5 dias habiles (Recojo en La Paz por la tarde).\n\nPaga vía QR el monto de tu compra. 📲\n\nImportante: Ten listas las fotos de tus productos y tu comprobante de pago. 🧾\n\nSube tus datos y capturas al siguiente formulario\n\n🌐 https://shop.importadoramiranda.com/live\n\n¡Tu pedido así de fácil y rápido! 🎊",
+    "verifyOrder": "🔍 *Verificar mi Pedido:*\n\nIngresa al siguiente enlace y escanea tu código QR:\n\n🔗 https://shop.importadoramiranda.com/qr\n\n✨ Así de fácil puedes consultar el estado de tu compra.",
+    "zonesDelivery": "🛍️ Descubre todos nuestros departamentos y lo que tenemos para ti\n\nExplora aquí: https://shop.importadoramiranda.com/departamentos"
   },
   "media": {
     "qrPayment": {
