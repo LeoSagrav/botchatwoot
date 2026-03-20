@@ -115,22 +115,17 @@ async function sendQRPaymentFlow(accountId, conversationId) {
   }
 }
 
-// 🔥 NUEVA FUNCIÓN: Flujo de reclamos - CORREGIDA
+// 🔥 Flujo de reclamos
 async function sendReclamosFlow(accountId, conversationId, contactId) {
   console.log(`📋 Enviando flujo de reclamos a conv ${conversationId}`);
   
   try {
-    // 1. Enviar mensaje de instrucciones (en un solo mensaje)
     await sendMessage(accountId, conversationId, botConfig.messages.reclamosInstructions);
     
-    // 2. Agregar etiqueta "reclamos" a la conversación en Chatwoot
     try {
-      // ✅ CORRECTO: Usar el endpoint correcto para labels
       await axios.post(
         `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/labels`,
-        { 
-          labels: ['reclamos']
-        },
+        { labels: ['reclamos'] },
         {
           headers: {
             'api_access_token': process.env.CHATWOOT_TOKEN,
@@ -139,15 +134,11 @@ async function sendReclamosFlow(accountId, conversationId, contactId) {
           timeout: 10000
         }
       );
-      console.log('✅ Etiqueta "reclamos" agregada a la conversación');
+      console.log('✅ Etiqueta "reclamos" agregada');
     } catch (labelError) {
-      console.error('⚠️ No se pudo agregar la etiqueta "reclamos":', labelError.response?.data || labelError.message);
-      // Continuar aunque falle la etiqueta
+      console.error('⚠️ No se pudo agregar etiqueta "reclamos":', labelError.message);
     }
     
-    
-    
-    // 3. Marcar como prioritaria y con atributos personalizados - CORREGIDO
     try {
       await axios.patch(
         `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
@@ -169,24 +160,19 @@ async function sendReclamosFlow(accountId, conversationId, contactId) {
           timeout: 10000
         }
       );
-      console.log('✅ Conversación actualizada con prioridad alta y atributos');
+      console.log('✅ Conversación actualizada con prioridad alta');
     } catch (updateError) {
-      console.error('⚠️ Error actualizando conversación:', updateError.response?.data || updateError.message);
-      // Continuar aunque falle la actualización
+      console.error('⚠️ Error actualizando conversación:', updateError.message);
     }
     
-    // 4. MARCAR COMO HANDOFF - ESTO ES LO MÁS IMPORTANTE
     markAsHandoff(accountId, conversationId);
     console.log('✅ Handoff marcado - Bot dejará de responder');
     
-    // 6. Asignar al equipo correcto (opcional - si tienes un team_id)
     try {
       if (process.env.CHATWOOT_TEAM_ID) {
         await axios.post(
           `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/assignments`,
-          {
-            team_id: parseInt(process.env.CHATWOOT_TEAM_ID)
-          },
+          { team_id: parseInt(process.env.CHATWOOT_TEAM_ID) },
           {
             headers: {
               'api_access_token': process.env.CHATWOOT_TOKEN,
@@ -195,19 +181,105 @@ async function sendReclamosFlow(accountId, conversationId, contactId) {
             timeout: 10000
           }
         );
-        console.log('✅ Conversación asignada al equipo de reclamos');
+        console.log('✅ Asignado al equipo de reclamos');
       }
     } catch (assignError) {
       console.log('⚠️ No se pudo asignar al equipo (opcional)');
     }
     
-    console.log('✅ Flujo de reclamos COMPLETADO - Bot detenido para esta conversación');
+    console.log('✅ Flujo de reclamos COMPLETADO');
     
   } catch (error) {
     console.error('❌ Error en flujo de reclamos:', error.message);
-    // Asegurar que se marque el handoff incluso si hay error
     markAsHandoff(accountId, conversationId);
     console.log('⚠️ Handoff forzado por error');
+  }
+}
+
+// 🔥 NUEVA FUNCIÓN: Flujo de Pedido Express
+async function sendExpressFlow(accountId, conversationId, contactId) {
+  console.log(`🚀 Enviando flujo Express a conv ${conversationId}`);
+  
+  try {
+    // 1. Enviar mensaje de instrucciones
+    await sendMessage(accountId, conversationId, botConfig.messages.expressInstructions);
+    
+    // 2. Agregar etiqueta "express"
+    try {
+      await axios.post(
+        `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/labels`,
+        { labels: ['express'] },
+        {
+          headers: {
+            'api_access_token': process.env.CHATWOOT_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        }
+      );
+      console.log('✅ Etiqueta "express" agregada');
+    } catch (labelError) {
+      console.error('⚠️ No se pudo agregar etiqueta "express":', labelError.message);
+    }
+    
+    // 3. Actualizar conversación con atributos personalizados
+    try {
+      await axios.patch(
+        `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
+        { 
+          status: 'open',
+          priority: 'urgent',
+          custom_attributes: { 
+            handled_by_bot: false,
+            requires_human: true,
+            order_type: 'express',
+            location: 'la_paz_pickup',
+            express_at: new Date().toISOString()
+          }
+        },
+        {
+          headers: {
+            'api_access_token': process.env.CHATWOOT_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        }
+      );
+      console.log('✅ Conversación marcada como Express con prioridad urgente');
+    } catch (updateError) {
+      console.error('⚠️ Error actualizando atributos:', updateError.message);
+    }
+    
+    // 4. ⚠️ MARCAR COMO HANDOFF - Bot deja de responder
+    markAsHandoff(accountId, conversationId);
+    console.log('✅ Handoff marcado - Bot detenido para Express');
+    
+    // 5. (Opcional) Asignar al equipo de ventas Express
+    try {
+      if (process.env.CHATWOOT_TEAM_EXPRESS_ID) {
+        await axios.post(
+          `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/assignments`,
+          { team_id: parseInt(process.env.CHATWOOT_TEAM_EXPRESS_ID) },
+          {
+            headers: {
+              'api_access_token': process.env.CHATWOOT_TOKEN,
+              'Content-Type': 'application/json'
+            },
+            timeout: 10000
+          }
+        );
+        console.log('✅ Asignado al equipo Express');
+      }
+    } catch (assignError) {
+      console.log('⚠️ No se pudo asignar al equipo Express (opcional)');
+    }
+    
+    console.log('✅ Flujo Express COMPLETADO');
+    
+  } catch (error) {
+    console.error('❌ Error en flujo Express:', error.message);
+    markAsHandoff(accountId, conversationId);
+    console.log('⚠️ Handoff forzado por error en Express');
   }
 }
 
@@ -341,10 +413,17 @@ app.post('/webhook/chatwoot', async (req, res) => {
 
     // === PALABRAS CLAVE ===
     
-    // 🔥 RECLAMOS - Por keyword directa (bypass handoff también)
+    // 🔥 RECLAMOS - Por keyword directa
     if (botConfig.keywords.reclamos?.some(k => message === k)) {
       console.log('✅ Reclamo solicitado por keyword exacta');
       await sendReclamosFlow(accountId, conversationId, contactId);
+      return res.sendStatus(200);
+    }
+
+    // 🔥 EXPRESS - Por keyword directa
+    if (botConfig.keywords.express?.some(k => message === k)) {
+      console.log('✅ Pedido Express solicitado por keyword');
+      await sendExpressFlow(accountId, conversationId, contactId);
       return res.sendStatus(200);
     }
 
@@ -373,6 +452,13 @@ app.post('/webhook/chatwoot', async (req, res) => {
     if (message === '7' || message === 'reclamos_trigger') {
       console.log('✅ Opción 7/Reclamos detectada desde menú');
       await sendReclamosFlow(accountId, conversationId, contactId);
+      return res.sendStatus(200);
+    }
+
+    // 🔥 Opción 8 del menú - Pedido Express
+    if (message === '8' || message === 'express_trigger') {
+      console.log('✅ Opción 8/Express detectada desde menú');
+      await sendExpressFlow(accountId, conversationId, contactId);
       return res.sendStatus(200);
     }
 
@@ -410,6 +496,8 @@ app.post('/webhook/chatwoot', async (req, res) => {
         await sendQRPaymentFlow(accountId, conversationId);
       } else if (option.action === 'send_reclamos_flow') {
         await sendReclamosFlow(accountId, conversationId, contactId);
+      } else if (option.action === 'send_express_flow') {
+        await sendExpressFlow(accountId, conversationId, contactId);
       } else {
         await sendMessage(accountId, conversationId, option.message);
       }
