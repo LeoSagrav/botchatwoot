@@ -34,7 +34,6 @@ app.get('/health', (req, res) => {
 });
 
 // 🔥 Función para enviar imagen + texto de pago QR
-// 🔥 Función para enviar imagen + texto de pago QR
 async function sendQRPaymentFlow(accountId, conversationId) {
   console.log(`🖼️ Enviando QR + mensaje de pago a conv ${conversationId}`);
   
@@ -46,12 +45,9 @@ async function sendQRPaymentFlow(accountId, conversationId) {
       return;
     }
 
-    // 🔥 Limpiar URL (quitar espacios en blanco)
     const cleanUrl = qrConfig.url.trim();
     console.log(`🔗 URL del QR: ${cleanUrl}`);
 
-    // Paso 1: Enviar la imagen del QR
-    // ✅ Formato CORRECTO para Chatwoot: remote_file_url para URLs remotas
     try {
       await axios.post(
         `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
@@ -59,11 +55,7 @@ async function sendQRPaymentFlow(accountId, conversationId) {
           content: qrConfig.caption || '📱 Código QR para pago',
           message_type: 'outgoing',
           private: false,
-          attachments: [
-            {
-              remote_file_url: cleanUrl  // ✅ Usar remote_file_url en lugar de file_url
-            }
-          ]
+          attachments: [{ remote_file_url: cleanUrl }]
         },
         {
           headers: {
@@ -74,68 +66,37 @@ async function sendQRPaymentFlow(accountId, conversationId) {
         }
       );
       console.log('✅ Imagen QR enviada correctamente');
-      
     } catch (imageError) {
       console.error('⚠️ Error enviando imagen, intentando método alternativo...');
-      
-      // 🔥 MÉTODO ALTERNATIVO: Descargar imagen y enviar como archivo
       try {
-        const imageResponse = await axios.get(cleanUrl, {
-          responseType: 'arraybuffer',
-          timeout: 10000
-        });
-        
+        const imageResponse = await axios.get(cleanUrl, { responseType: 'arraybuffer', timeout: 10000 });
         const imageBuffer = Buffer.from(imageResponse.data);
         const contentType = imageResponse.headers['content-type'] || 'image/jpeg';
-        
-        // Crear FormData para upload
         const FormData = require('form-data');
         const form = new FormData();
         form.append('content', qrConfig.caption || '📱 Código QR para pago');
         form.append('message_type', 'outgoing');
         form.append('private', 'false');
-        form.append('attachments[]', imageBuffer, {
-          filename: 'qr-miranda.jpg',
-          contentType: contentType
-        });
+        form.append('attachments[]', imageBuffer, { filename: 'qr-miranda.jpg', contentType });
         
         await axios.post(
           `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
           form,
-          {
-            headers: {
-              'api_access_token': process.env.CHATWOOT_TOKEN,
-              ...form.getHeaders()
-            },
-            timeout: 15000
-          }
+          { headers: { 'api_access_token': process.env.CHATWOOT_TOKEN, ...form.getHeaders() }, timeout: 15000 }
         );
         console.log('✅ Imagen QR enviada como archivo binario');
-        
       } catch (binaryError) {
         console.error('❌ Error en método binario:', binaryError.message);
         throw binaryError;
       }
     }
     
-    // Pequeña pausa para asegurar orden de mensajes
     await new Promise(resolve => setTimeout(resolve, 800));
     
-    // Paso 2: Enviar el mensaje de texto con instrucciones
     await axios.post(
       `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
-      {
-        content: botConfig.messages.qrPayment,
-        message_type: 'outgoing',
-        private: false
-      },
-      {
-        headers: {
-          'api_access_token': process.env.CHATWOOT_TOKEN,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      }
+      { content: botConfig.messages.qrPayment, message_type: 'outgoing', private: false },
+      { headers: { 'api_access_token': process.env.CHATWOOT_TOKEN, 'Content-Type': 'application/json' }, timeout: 10000 }
     );
     console.log('✅ Mensaje de pago enviado');
     
@@ -143,28 +104,9 @@ async function sendQRPaymentFlow(accountId, conversationId) {
     console.error('❌ Error enviando QR payment:');
     console.error('  Status:', error.response?.status);
     console.error('  Data:', error.response?.data);
-    
-    // 🔥 Fallback final: Enviar solo texto con link
     console.log('⚠️ Fallback: Enviando solo texto con link al QR...');
     try {
-      const fallbackMessage = `📱 Escanea este QR para pagar tu pedido
-
-🔗 ${botConfig.media?.qrPayment?.url?.trim()}
-
-🛍️ ¡TU PEDIDO CASI ESTÁ EN CAMINO!
-
-🚛 Agenda: Los pedidos se enviarán a partir del 3 a 5 dias habiles (Recojo en La Paz por la tarde).
-
-Paga vía QR el monto de tu compra. 📲
-
-Importante: Ten listas las fotos de tus productos y tu comprobante de pago. 🧾
-
-Sube tus datos y capturas al siguiente formulario
-
-🌐 https://shop.importadoramiranda.com/live
-
-¡Tu pedido así de fácil y rápido! 🎊`;
-      
+      const fallbackMessage = `📱 Escanea este QR para pagar tu pedido\n\n🔗 ${botConfig.media?.qrPayment?.url?.trim()}\n\n${botConfig.messages.qrPayment}`;
       await sendMessage(accountId, conversationId, fallbackMessage);
       console.log('✅ Fallback enviado correctamente');
     } catch (fallbackError) {
@@ -172,6 +114,103 @@ Sube tus datos y capturas al siguiente formulario
     }
   }
 }
+
+// 🔥 NUEVA FUNCIÓN: Flujo de reclamos - CORREGIDA
+async function sendReclamosFlow(accountId, conversationId, contactId) {
+  console.log(`📋 Enviando flujo de reclamos a conv ${conversationId}`);
+  
+  try {
+    // 1. Enviar mensaje de instrucciones (en un solo mensaje)
+    await sendMessage(accountId, conversationId, botConfig.messages.reclamosInstructions);
+    
+    // 2. Agregar etiqueta "reclamos" a la conversación en Chatwoot
+    try {
+      // ✅ CORRECTO: Usar el endpoint correcto para labels
+      await axios.post(
+        `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/labels`,
+        { 
+          labels: ['reclamos']
+        },
+        {
+          headers: {
+            'api_access_token': process.env.CHATWOOT_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        }
+      );
+      console.log('✅ Etiqueta "reclamos" agregada a la conversación');
+    } catch (labelError) {
+      console.error('⚠️ No se pudo agregar la etiqueta "reclamos":', labelError.response?.data || labelError.message);
+      // Continuar aunque falle la etiqueta
+    }
+    
+    
+    
+    // 3. Marcar como prioritaria y con atributos personalizados - CORREGIDO
+    try {
+      await axios.patch(
+        `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
+        { 
+          status: 'open',
+          priority: 'high',
+          custom_attributes: { 
+            handled_by_bot: false,
+            requires_human: true,
+            complaint_type: 'reclamos',
+            reclamo_at: new Date().toISOString()
+          }
+        },
+        {
+          headers: {
+            'api_access_token': process.env.CHATWOOT_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        }
+      );
+      console.log('✅ Conversación actualizada con prioridad alta y atributos');
+    } catch (updateError) {
+      console.error('⚠️ Error actualizando conversación:', updateError.response?.data || updateError.message);
+      // Continuar aunque falle la actualización
+    }
+    
+    // 4. MARCAR COMO HANDOFF - ESTO ES LO MÁS IMPORTANTE
+    markAsHandoff(accountId, conversationId);
+    console.log('✅ Handoff marcado - Bot dejará de responder');
+    
+    // 6. Asignar al equipo correcto (opcional - si tienes un team_id)
+    try {
+      if (process.env.CHATWOOT_TEAM_ID) {
+        await axios.post(
+          `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/assignments`,
+          {
+            team_id: parseInt(process.env.CHATWOOT_TEAM_ID)
+          },
+          {
+            headers: {
+              'api_access_token': process.env.CHATWOOT_TOKEN,
+              'Content-Type': 'application/json'
+            },
+            timeout: 10000
+          }
+        );
+        console.log('✅ Conversación asignada al equipo de reclamos');
+      }
+    } catch (assignError) {
+      console.log('⚠️ No se pudo asignar al equipo (opcional)');
+    }
+    
+    console.log('✅ Flujo de reclamos COMPLETADO - Bot detenido para esta conversación');
+    
+  } catch (error) {
+    console.error('❌ Error en flujo de reclamos:', error.message);
+    // Asegurar que se marque el handoff incluso si hay error
+    markAsHandoff(accountId, conversationId);
+    console.log('⚠️ Handoff forzado por error');
+  }
+}
+
 // Función para enviar mensaje de texto normal
 async function sendMessage(accountId, conversationId, content) {
   console.log(`📤 Enviando mensaje a conv ${conversationId}`);
@@ -283,8 +322,6 @@ app.post('/webhook/chatwoot', async (req, res) => {
     if (cleanContent === 'miranda') {
       console.log('✅ "miranda" exacto detectado - Ejecutando QR payment (bypass handoff)');
       await sendQRPaymentFlow(accountId, conversationId);
-      
-      // Mostrar menú nuevamente
       await new Promise(resolve => setTimeout(resolve, 800));
       await sendMessage(accountId, conversationId, '\n\n¿Necesitas algo más? Escribe *menú* para ver opciones.');
       return res.sendStatus(200);
@@ -304,6 +341,13 @@ app.post('/webhook/chatwoot', async (req, res) => {
 
     // === PALABRAS CLAVE ===
     
+    // 🔥 RECLAMOS - Por keyword directa (bypass handoff también)
+    if (botConfig.keywords.reclamos?.some(k => message === k)) {
+      console.log('✅ Reclamo solicitado por keyword exacta');
+      await sendReclamosFlow(accountId, conversationId, contactId);
+      return res.sendStatus(200);
+    }
+
     // Handoff - Transferir a asesor humano
     if (botConfig.keywords.handoff.some(k => message.includes(k))) {
       console.log('✅ Handoff solicitado');
@@ -315,15 +359,20 @@ app.post('/webhook/chatwoot', async (req, res) => {
     if (botConfig.keywords.miranda?.includes(message) || message === 'miranda_trigger') {
       console.log('✅ Opción 4/Miranda detectada desde menú');
       await sendQRPaymentFlow(accountId, conversationId);
-      
       const currentMenu = botConfig.menus[state.menu];
       const option = currentMenu?.options?.[message] || currentMenu?.options?.['4'];
-      
       if (option?.showMenuAgain) {
         await new Promise(resolve => setTimeout(resolve, 800));
         await sendMessage(accountId, conversationId, '\n\n¿Necesitas algo más? Escribe *menú* para ver opciones.');
       }
       clearState(accountId, conversationId);
+      return res.sendStatus(200);
+    }
+
+    // 🔥 Opción 7 del menú - Reclamos
+    if (message === '7' || message === 'reclamos_trigger') {
+      console.log('✅ Opción 7/Reclamos detectada desde menú');
+      await sendReclamosFlow(accountId, conversationId, contactId);
       return res.sendStatus(200);
     }
 
@@ -339,12 +388,10 @@ app.post('/webhook/chatwoot', async (req, res) => {
     // Saludo - Permite reiniciar incluso después de handoff
     if (botConfig.keywords.greeting.some(k => message.includes(k))) {
       console.log('✅ Saludo detectado');
-      
       if (isHandedOff(accountId, conversationId)) {
         releaseHandoff(accountId, conversationId);
         console.log('🔄 Handoff liberado por saludo del cliente');
       }
-      
       state.menu = 'principal';
       setState(accountId, conversationId, state);
       await sendMessage(accountId, conversationId, botConfig.menus.principal.greeting);
@@ -358,9 +405,11 @@ app.post('/webhook/chatwoot', async (req, res) => {
       console.log(`✅ Opción "${message}" del menú "${state.menu}"`);
       const option = currentMenu.options[message];
       
-      // Si es acción especial (como send_qr_payment)
+      // Si es acción especial
       if (option.action === 'send_qr_payment') {
         await sendQRPaymentFlow(accountId, conversationId);
+      } else if (option.action === 'send_reclamos_flow') {
+        await sendReclamosFlow(accountId, conversationId, contactId);
       } else {
         await sendMessage(accountId, conversationId, option.message);
       }
