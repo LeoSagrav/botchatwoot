@@ -8,7 +8,7 @@ const path = require('path');
 const { getState, setState, clearState, markAsHandoff, isHandedOff, releaseHandoff } = require('./utils/conversation-state');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3030;
 
 // Cargar configuración del bot
 const botConfig = JSON.parse(
