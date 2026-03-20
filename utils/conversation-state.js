@@ -50,6 +50,7 @@ function cleanupOldStates(maxAgeHours = 24) {
   }
 }
 
+// Limpieza automática cada hora
 setInterval(cleanupOldStates, 60 * 60 * 1000);
 
 module.exports = {

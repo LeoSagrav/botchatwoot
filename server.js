@@ -196,15 +196,13 @@ async function sendReclamosFlow(accountId, conversationId, contactId) {
   }
 }
 
-// 🔥 NUEVA FUNCIÓN: Flujo de Pedido Express
+// 🔥 Flujo de Pedido Express
 async function sendExpressFlow(accountId, conversationId, contactId) {
   console.log(`🚀 Enviando flujo Express a conv ${conversationId}`);
   
   try {
-    // 1. Enviar mensaje de instrucciones
     await sendMessage(accountId, conversationId, botConfig.messages.expressInstructions);
     
-    // 2. Agregar etiqueta "express"
     try {
       await axios.post(
         `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/labels`,
@@ -222,7 +220,6 @@ async function sendExpressFlow(accountId, conversationId, contactId) {
       console.error('⚠️ No se pudo agregar etiqueta "express":', labelError.message);
     }
     
-    // 3. Actualizar conversación con atributos personalizados
     try {
       await axios.patch(
         `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
@@ -250,11 +247,9 @@ async function sendExpressFlow(accountId, conversationId, contactId) {
       console.error('⚠️ Error actualizando atributos:', updateError.message);
     }
     
-    // 4. ⚠️ MARCAR COMO HANDOFF - Bot deja de responder
     markAsHandoff(accountId, conversationId);
     console.log('✅ Handoff marcado - Bot detenido para Express');
     
-    // 5. (Opcional) Asignar al equipo de ventas Express
     try {
       if (process.env.CHATWOOT_TEAM_EXPRESS_ID) {
         await axios.post(
@@ -314,55 +309,146 @@ async function sendMessage(accountId, conversationId, content) {
 }
 
 // Handoff a asesor humano
+// Handoff a asesor humano
 async function sendHandoff(accountId, conversationId, contactId) {
   console.log('👤 Realizando handoff...');
   
   try {
+    // 1. Marcar en memoria PRIMERO
     markAsHandoff(accountId, conversationId);
     
+    // 2. Enviar mensaje de confirmación al usuario
     await sendMessage(accountId, conversationId, botConfig.messages.handoffConfirmation);
     
-    await axios.post(
-      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
-      {
-        content: `🤖 *Bot:* Cliente ${contactId} solicitó atención humana. *El bot ha dejado de responder.*`,
-        message_type: 'note',
-        private: true
-      },
-      {
-        headers: {
-          'api_access_token': process.env.CHATWOOT_TOKEN,
-          'Content-Type': 'application/json'
+    // 3. 🔥 AGREGAR ETIQUETA "handoff" VÍA API (esto faltaba!)
+    try {
+      await axios.post(
+        `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/labels`,
+        { labels: ['handoff'] },
+        {
+          headers: {
+            'api_access_token': process.env.CHATWOOT_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
         }
-      }
-    );
+      );
+      console.log('✅ Etiqueta "handoff" agregada a Chatwoot');
+    } catch (labelError) {
+      console.error('⚠️ No se pudo agregar etiqueta "handoff":', labelError.message);
+      // No lanzamos error aquí para no bloquear el handoff completo
+    }
     
-    await axios.patch(
-      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
-      { 
-        status: 'open', 
-        priority: 'high',
-        custom_attributes: { 
-          handled_by_bot: false, 
-          requires_human: true,
-          handoff_at: new Date().toISOString()
+    // 4. Enviar nota privada para el equipo
+    try {
+      await axios.post(
+        `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+        {
+          content: `🤖 *Bot:* Cliente ${contactId} solicitó atención humana. *El bot ha dejado de responder.*`,
+          message_type: 'note',
+          private: true
+        },
+        {
+          headers: {
+            'api_access_token': process.env.CHATWOOT_TOKEN,
+            'Content-Type': 'application/json'
+          }
         }
-      },
-      {
-        headers: {
-          'api_access_token': process.env.CHATWOOT_TOKEN,
-          'Content-Type': 'application/json'
+      );
+    } catch (noteError) {
+      console.error('⚠️ No se pudo enviar nota privada:', noteError.message);
+    }
+    
+    // 5. Actualizar atributos personalizados
+    try {
+      await axios.patch(
+        `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
+        { 
+          status: 'open', 
+          priority: 'high',
+          custom_attributes: { 
+            handled_by_bot: false, 
+            requires_human: true,
+            handoff_at: new Date().toISOString()
+          }
+        },
+        {
+          headers: {
+            'api_access_token': process.env.CHATWOOT_TOKEN,
+            'Content-Type': 'application/json'
+          }
         }
-      }
-    );
+      );
+    } catch (updateError) {
+      console.error('⚠️ Error actualizando conversación:', updateError.message);
+    }
     
     console.log('✅ Handoff completado');
   } catch (error) {
     console.error('❌ Error en handoff:', error.message);
+    // Asegurar handoff en memoria incluso si falla algo
+    markAsHandoff(accountId, conversationId);
   }
 }
 
+// ============================================================================
+// 🔥 FUNCIONES NUEVAS: Verificación de etiquetas para auto-release de handoff
+// ============================================================================
+
+/**
+ * Obtiene las etiquetas actuales de una conversación desde Chatwoot API
+ */
+async function getConversationLabels(accountId, conversationId) {
+  try {
+    const response = await axios.get(
+      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
+      {
+        headers: {
+          'api_access_token': process.env.CHATWOOT_TOKEN,
+          'Content-Type': 'application/json'
+        },
+        timeout: 8000
+      }
+    );
+    return response.data.labels || [];
+  } catch (error) {
+    console.error(`⚠️ Error obteniendo etiquetas para conv ${conversationId}:`, error.message);
+    return []; // Fallback seguro para no bloquear el flujo
+  }
+}
+
+/**
+ * Verifica si debe liberar el handoff cuando se eliminan las etiquetas clave
+ * @returns {Promise<boolean>} true si se liberó el handoff, false si se mantiene
+ */
+async function checkAndReleaseHandoffIfNoLabels(accountId, conversationId) {
+  // Etiquetas que, si están presentes, deben mantener el handoff activo
+  const handoffLabels = ['reclamos', 'express', 'handoff', 'human'];
+  
+  try {
+    const currentLabels = await getConversationLabels(accountId, conversationId);
+    const hasHandoffLabel = currentLabels.some(label => 
+      handoffLabels.includes(label.toLowerCase())
+    );
+    
+    // ⚠️ IMPORTANTE: Solo liberar si NO tiene etiquetas de handoff Y está marcado como handoff
+    if (!hasHandoffLabel && isHandedOff(accountId, conversationId)) {
+      console.log(`🔓 Liberando handoff para conv ${conversationId} - Etiquetas actuales: [${currentLabels.join(', ')}]`);
+      releaseHandoff(accountId, conversationId);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    // ⚠️ Si falla la consulta a Chatwoot, MANTENER el handoff por seguridad
+    console.error(`⚠️ Error verificando etiquetas para conv ${conversationId}:`, error.message);
+    return false; // No liberar si hay error
+  }
+}
+
+// ============================================================================
 // Webhook principal de Chatwoot
+// ============================================================================
+
 app.post('/webhook/chatwoot', async (req, res) => {
   try {
     // === EXTRAER CAMPOS ===
@@ -370,7 +456,6 @@ app.post('/webhook/chatwoot', async (req, res) => {
     const conversationId = req.body.conversation?.id;
     const message_type = req.body.message_type;
     const content = req.body.content;
-    const inbox_id = req.body.inbox?.id;
     
     const sender_type = req.body.conversation?.meta?.sender?.type;
     const contactId = req.body.conversation?.meta?.sender?.id;
@@ -390,7 +475,7 @@ app.post('/webhook/chatwoot', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // 🔥 PRIORIDAD MÁXIMA: "miranda" EXACTO siempre ejecuta QR (incluso si hay handoff)
+    // 🔥 PRIORIDAD MÁXIMA: "miranda" EXACTO siempre ejecuta QR (bypass handoff)
     if (cleanContent === 'miranda') {
       console.log('✅ "miranda" exacto detectado - Ejecutando QR payment (bypass handoff)');
       await sendQRPaymentFlow(accountId, conversationId);
@@ -399,10 +484,18 @@ app.post('/webhook/chatwoot', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // 🔥 Verificar si ya fue transferida a humano (para todos los demás mensajes)
+    // 🔥 Verificar si ya fue transferida a humano (CON VERIFICACIÓN DE ETIQUETAS)
     if (isHandedOff(accountId, conversationId)) {
-      console.log(`⏭️ Conversación ${conversationId} ya está con asesor humano - Bot ignorando`);
-      return res.sendStatus(200);
+      // ✅ NUEVO: Verificar si aún tiene etiquetas de handoff en Chatwoot
+      const released = await checkAndReleaseHandoffIfNoLabels(accountId, conversationId);
+      
+      // ⚠️ Si NO se liberó (sigue teniendo etiquetas), el bot NO responde
+      if (!released) {
+        console.log(`⏭️ Conversación ${conversationId} mantiene handoff - Bot ignorando`);
+        return res.sendStatus(200);
+      }
+      // ✅ Si se liberó, continuar con el procesamiento normal
+      console.log(`🔄 Handoff liberado automáticamente - Continuando procesamiento`);
     }
 
     console.log(`💬 Procesando: "${cleanContent}"`);
