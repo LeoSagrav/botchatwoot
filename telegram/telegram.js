@@ -10,7 +10,7 @@ const os = require("os");
 const app = express();
 app.use(express.json({ limit: '100mb' }));
 
-// === CONFIGURACIÓN TELEGRAM (TU NÚMERO PERSONAL) ===
+// === CONFIGURACIÓN TELEGRAM ===
 const apiId = 39897045;
 const apiHash = "a5aff9fd7ed70051b207c325363f5bfd";
 const stringSession = new StringSession("1AQAOMTQ5LjE1NC4xNzUuNTUBu5uadHHIWkJbaBHsVYx7x0jPZzhRNbpeDGrUSu67BhaSvPNJJYTX6IV/ZcfbjrSsu/m6teNtrb5Ce6hXH557mJVmPGzzeyg2sS/g+Ud346w9xUl0Dbgxtm/57d6vowqNxaj1gvbHFt86dnQ9ynDkyyBRrs1QEQXr9Tt5wIJwnbj7ObyCvsDG/x39x05d0m9KTqyFFsnUxrME6dAK0Y/ph/zAba8TrQuUuSi5DiO1gFO2W7HMBUQG01nFYgsaHpglZs1SDFvo7LOg8R8vaDEXDSdeM3TefxQHLcekbYCx7cjMDFgGCLC4LsDjKvJUeTsQ7qBYG2MMi3yuTKuNtioh1Rg=");
@@ -59,7 +59,7 @@ async function findContactByTelegramId(telegramChatId) {
     return null;
 }
 
-// === CREAR O ACTUALIZAR CONTACTO ===
+// === CREAR O ACTUALIZAR CONTACTO (✅ CON REFRESH PARA contact_inboxes) ===
 async function createOrUpdateContact(phoneNumber, firstName, telegramChatId) {
     const cacheKey = `tg:${telegramChatId}`;
     if (contactCache.has(cacheKey)) return contactCache.get(cacheKey);
@@ -89,9 +89,18 @@ async function createOrUpdateContact(phoneNumber, firstName, telegramChatId) {
             contactData,
             { headers: getHeaders() }
         );
+        
+        // ✅ CRÍTICO: Esperar y refrescar para obtener contact_inboxes con source_id
+        await sleep(400);
+        const refreshed = await axios.get(
+            `${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/contacts/${response.data.id}`,
+            { headers: getHeaders() }
+        );
+        
         console.log(`✅ Contacto creado: ${telegramChatId}`);
-        contactCache.set(cacheKey, response.data);
-        return response.data;
+        contactCache.set(cacheKey, refreshed.data);
+        return refreshed.data;
+        
     } catch (error) {
         const errorMsg = error.response?.data?.message || error.message;
         if (errorMsg.includes('Identifier has already been taken')) {
@@ -107,16 +116,48 @@ async function createOrUpdateContact(phoneNumber, firstName, telegramChatId) {
     }
 }
 
-// === 🔑 OBTENER SOURCE_ID ===
-function getSourceIdForInbox(contact, inboxId) {
+// === 🔑 OBTENER SOURCE_ID (✅ CON RETRY Y LOGGING) ===
+async function getSourceIdForInbox(contact, inboxId) {
+    // 1️⃣ Intentar desde contact_inboxes
     if (contact?.contact_inboxes?.length > 0) {
         const inboxLink = contact.contact_inboxes.find(
             ci => ci.inbox?.id === inboxId || ci.inbox_id === inboxId
         );
-        if (inboxLink?.source_id) return inboxLink.source_id;
+        if (inboxLink?.source_id) {
+            console.log(`🔑 source_id encontrado: ${inboxLink.source_id}`);
+            return inboxLink.source_id;
+        }
     }
-    if (contact?.identifier) return contact.identifier;
-    if (contact?.custom_attributes?.telegram_chat_id) return contact.custom_attributes.telegram_chat_id;
+    
+    // 2️⃣ Refrescar contacto si contact_inboxes está vacío
+    console.log(`🔄 contact_inboxes vacío, refrescando contacto ${contact?.id}...`);
+    await sleep(500);
+    try {
+        const refreshed = await axios.get(
+            `${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/contacts/${contact?.id}`,
+            { headers: getHeaders() }
+        );
+        
+        if (refreshed.data?.contact_inboxes?.length > 0) {
+            const inboxLink = refreshed.data.contact_inboxes.find(
+                ci => ci.inbox?.id === inboxId || ci.inbox_id === inboxId
+            );
+            if (inboxLink?.source_id) {
+                console.log(`🔑 source_id tras refresh: ${inboxLink.source_id}`);
+                return inboxLink.source_id;
+            }
+        }
+    } catch (e) {
+        console.error(`⚠️ Error refrescando contacto:`, e.message);
+    }
+    
+    // 3️⃣ Fallback: usar identifier (puede funcionar en algunos casos)
+    if (contact?.identifier) {
+        console.log(`⚠️ Fallback a identifier: ${contact.identifier}`);
+        return contact.identifier;
+    }
+    
+    console.error(`❌ No se pudo obtener source_id para inbox ${inboxId}`);
     return null;
 }
 
@@ -131,7 +172,10 @@ async function findActiveConversation(contactId, telegramChatId) {
             const activeConv = response.data.payload.find(
                 c => c.inbox_id === CHATWOOT_INBOX_ID && c.status !== "resolved"
             );
-            if (activeConv) return activeConv.id;
+            if (activeConv) {
+                console.log(`💬 Conversación existente encontrada: ${activeConv.id}`);
+                return activeConv.id;
+            }
         }
     } catch (error) {
         if (error.response?.status !== 404) {
@@ -141,11 +185,16 @@ async function findActiveConversation(contactId, telegramChatId) {
     return null;
 }
 
-// === CREAR CONVERSACIÓN ===
+// === CREAR CONVERSACIÓN (✅ CON LOGGING COMPLETO) ===
 async function createConversation(contact, telegramChatId) {
     try {
-        const sourceId = getSourceIdForInbox(contact, CHATWOOT_INBOX_ID);
-        if (!sourceId) return null;
+        console.log(`🔄 Creando conversación para contacto ${contact?.id}...`);
+        
+        const sourceId = await getSourceIdForInbox(contact, CHATWOOT_INBOX_ID);
+        if (!sourceId) {
+            console.error(`❌ No se pudo obtener source_id, abortando creación`);
+            return null;
+        }
 
         const requestData = {
             source_id: sourceId,
@@ -158,29 +207,46 @@ async function createConversation(contact, telegramChatId) {
             }
         };
         
+        console.log(`📋 Request conversación:`, JSON.stringify({
+            source_id: requestData.source_id.substring(0, 8) + '...',
+            inbox_id: requestData.inbox_id,
+            contact_id: requestData.contact_id
+        }));
+        
         const response = await axios.post(
             `${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/conversations`,
             requestData,
             { headers: getHeaders() }
         );
-        console.log(`💬 Conversación creada: ${response.data.id}`);
+        
+        console.log(`💬 Conversación CREADA: ID=${response.data.id}`);
+        console.log(`🔗 URL directa: ${CHATWOOT_URL}/app/accounts/${CHATWOOT_ACCOUNT_ID}/conversations/${response.data.id}`);
+        
         conversationCache.set(telegramChatId, response.data.id);
         return response.data.id;
+        
     } catch (error) {
+        console.error(`❌ ERROR creando conversación:`);
+        console.error(`   Status: ${error.response?.status}`);
+        console.error(`   Data:`, error.response?.data);
+        console.error(`   Message:`, error.message);
+        
+        // Si ya existe, buscarla
         if (error.response?.status === 400 || error.response?.data?.message?.includes('already')) {
+            console.log(`🔄 Buscando conversación existente...`);
             const existingConvId = await findActiveConversation(contact.id, telegramChatId);
             if (existingConvId) {
                 conversationCache.set(telegramChatId, existingConvId);
                 return existingConvId;
             }
         }
-        console.error(`❌ Error conversación:`, error.response?.data || error.message);
         return null;
     }
 }
 
 // === 🔑 FUNCIÓN PRINCIPAL: OBTENER CONVERSACIÓN ===
 async function getOrCreateConversation(telegramChatId, phoneNumber, senderName) {
+    // 1️⃣ Cache en memoria
     if (conversationCache.has(telegramChatId)) {
         const cachedId = conversationCache.get(telegramChatId);
         try {
@@ -188,44 +254,65 @@ async function getOrCreateConversation(telegramChatId, phoneNumber, senderName) 
                 `${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/conversations/${cachedId}`,
                 { headers: getHeaders() }
             );
-            if (check.data?.status !== "resolved") return cachedId;
+            if (check.data?.status !== "resolved") {
+                console.log(`⚡ Conversación desde cache: ${cachedId}`);
+                return cachedId;
+            }
         } catch (e) {
+            console.log(`🔄 Conversación cacheada no encontrada`);
             conversationCache.delete(telegramChatId);
         }
     }
 
+    // 2️⃣ Obtener o crear contacto
     const contact = await createOrUpdateContact(phoneNumber, senderName, telegramChatId);
-    if (!contact?.id) return null;
-
-    const isExistingContact = contact.created_at !== contact.updated_at || contactCache.has(`tg:${telegramChatId}`);
-    if (isExistingContact) {
-        const existingConvId = await findActiveConversation(contact.id, telegramChatId);
-        if (existingConvId) {
-            conversationCache.set(telegramChatId, existingConvId);
-            return existingConvId;
-        }
+    if (!contact?.id) {
+        console.error(`❌ No se pudo obtener contacto para ${telegramChatId}`);
+        return null;
     }
+
+    // 3️⃣ Buscar conversación existente
+    const existingConvId = await findActiveConversation(contact.id, telegramChatId);
+    if (existingConvId) {
+        conversationCache.set(telegramChatId, existingConvId);
+        return existingConvId;
+    }
+
+    // 4️⃣ Crear nueva conversación
     return await createConversation(contact, telegramChatId);
 }
 
 // === ENVIAR MENSAJE A CHATWOOT ===
 async function sendToChatwoot(telegramChatId, messageText, senderName = "Usuario", messageType = "incoming", phoneNumber = null) {
+    console.log(`\n📨 sendToChatwoot: ${telegramChatId} | "${messageText?.substring(0, 30)}..."`);
+    
     const conversationId = await getOrCreateConversation(telegramChatId, phoneNumber, senderName);
-    if (!conversationId) return;
+    
+    if (!conversationId) {
+        console.error(`❌ No se pudo obtener ID de conversación para ${telegramChatId}`);
+        return;
+    }
 
     try {
-        await axios.post(
+        console.log(`📤 Enviando mensaje a conversación ${conversationId}...`);
+        
+        const response = await axios.post(
             `${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/conversations/${conversationId}/messages`,
             { content: messageText, message_type: messageType, private: false },
             { headers: getHeaders() }
         );
-        console.log(`📨 Mensaje sincronizado (Conv: ${conversationId})`);
+        
+        console.log(`✅ Mensaje sincronizado (Conv: ${conversationId}, Msg ID: ${response.data?.id})`);
     } catch (error) {
+        console.error(`❌ Error enviando mensaje:`);
+        console.error(`   Status: ${error.response?.status}`);
+        console.error(`   Data:`, error.response?.data);
+        
         if (error.response?.status === 404) {
+            console.log(`🔄 Conversación no encontrada, limpiando cache...`);
             conversationCache.delete(telegramChatId);
             return sendToChatwoot(telegramChatId, messageText, senderName, messageType, phoneNumber);
         }
-        console.error(`❌ Error Chatwoot:`, error.response?.data || error.message);
     }
 }
 
@@ -259,28 +346,25 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
                 telegramEntityCache.set(telegramChatId, entity);
             }
 
-            // ✅ 1. Enviar TEXTO (igual que antes)
+            // ✅ 1. Enviar TEXTO
             if (messageContent) {
                 await client.sendMessage(entity, { message: messageContent });
                 console.log(`✅ Texto enviado`);
             }
 
-            // ✅ 2. 🔥 ENVIAR IMÁGENES / ARCHIVOS (NUEVO)
+            // ✅ 2. Enviar IMÁGENES / ARCHIVOS
             if (attachments.length > 0) {
                 for (const att of attachments) {
                     try {
                         const fileUrl = att.data_url || att.file_url;
-
                         if (!fileUrl) continue;
 
                         console.log(`📷 Enviando archivo: ${fileUrl}`);
-
                         await client.sendFile(entity, {
                             file: fileUrl,
                             caption: messageContent || "",
-                            forceDocument: false // 👈 se envía como imagen (no archivo)
+                            forceDocument: false
                         });
-
                         console.log(`✅ Imagen enviada`);
                     } catch (fileErr) {
                         console.error(`❌ Error enviando archivo: ${fileErr.message}`);
@@ -299,7 +383,6 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
                 if (messageContent) {
                     await client.sendMessage(entity, { message: messageContent });
                 }
-
                 if (attachments.length > 0) {
                     for (const att of attachments) {
                         const fileUrl = att.data_url || att.file_url;
@@ -312,7 +395,6 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
                         }
                     }
                 }
-
                 console.log(`✅ Reintento exitoso`);
             } catch (err2) {
                 console.error(`❌ Reintento fallido: ${err2.message}`);
@@ -387,31 +469,22 @@ app.post("/enviar-comprobante", async (req, res) => {
     console.log("🔐 Usuario:", me.firstName);
     console.log("📱 Número: +", me.phone);
     console.log(`🆔 TU ID: ${BOT_OWNER_ID}`);
-    console.log("💡 Tus mensajes se sincronizarán como 'outgoing'");
+    console.log("💡 Conversaciones con source_id correcto para interfaz");
 
     client.addEventHandler(async (event) => {
         const message = event.message;
-        
-        // ✅ FILTRO 1: Solo mensajes privados
-        if (!message.isPrivate) {
-            return;
-        }
+        if (!message.isPrivate) return;
 
         const text = message.text || "";
         const chatId = message.chatId;
         const sender = message.sender;
         
-        // ✅ FILTRO 2: Detectar si es mensaje TUYO o del cliente
         if (message.out) {
-            // ✅ Es TU mensaje → Sincronizar como "outgoing"
             console.log(`📤 [Telegram] Tu mensaje a ${chatId}: ${text.substring(0, 50)}`);
-            
-            // Sincronizar como mensaje saliente (outgoing)
             await sendToChatwoot(chatId, text, me.firstName || "Agente", "outgoing", null);
             return;
         }
 
-        // ✅ Es mensaje del CLIENTE → Sincronizar como "incoming"
         const senderName = sender?.firstName || "Usuario";
         const phoneNumber = sender?.phone ? `+${sender.phone}` : null;
 
@@ -420,8 +493,6 @@ app.post("/enviar-comprobante", async (req, res) => {
         }
 
         console.log(`📨 [Telegram] ${senderName} (${chatId}): ${text.substring(0, 50)}`);
-        
-        // Sincronizar como mensaje entrante (incoming)
         await sendToChatwoot(chatId, text, senderName, "incoming", phoneNumber);
     }, new NewMessage({}));
 
@@ -430,6 +501,6 @@ app.post("/enviar-comprobante", async (req, res) => {
         console.log(`\n🚀 Bridge en http://localhost:${PORT}`);
         console.log(`📡 Webhook: http://localhost:${PORT}/webhook/chatwoot-telegram`);
         console.log(`📦 Comprobantes: http://localhost:${PORT}/enviar-comprobante`);
-        console.log(`✅ Listo - Mensajes bidireccionales sincronizados`);
+        console.log(`✅ Listo - Conversaciones visibles en interfaz`);
     });
 })();
