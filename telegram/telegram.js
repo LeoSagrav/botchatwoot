@@ -240,15 +240,16 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
     const isOutgoing = messageType === 1 || messageType === 'outgoing';
     const messageContent = event.content;
     const telegramChatId = event.conversation?.custom_attributes?.telegram_chat_id;
+    const attachments = event.attachments || [];
     
     console.log(`🔍 messageType: ${messageType} → isOutgoing: ${isOutgoing}`);
     console.log(`🔍 content: "${messageContent?.substring(0, 50)}"`);
     console.log(`🔍 telegram_chat_id: ${telegramChatId}`);
+    console.log(`🔍 attachments: ${attachments.length}`);
     
-    if (event.event === "message_created" && isOutgoing && telegramChatId && messageContent) {
+    if (event.event === "message_created" && isOutgoing && telegramChatId) {
         console.log(`\n📤 ENVIANDO A TELEGRAM:`);
         console.log(`   🆔 Chat ID: ${telegramChatId}`);
-        console.log(`   💬 Mensaje: "${messageContent.substring(0, 100)}"`);
 
         try {
             let entity = telegramEntityCache.get(telegramChatId);
@@ -258,15 +259,60 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
                 telegramEntityCache.set(telegramChatId, entity);
             }
 
-            await client.sendMessage(entity, { message: messageContent });
-            console.log(`✅ ✅ ✅ MENSAJE ENVIADO ✅ ✅ ✅`);
+            // ✅ 1. Enviar TEXTO (igual que antes)
+            if (messageContent) {
+                await client.sendMessage(entity, { message: messageContent });
+                console.log(`✅ Texto enviado`);
+            }
+
+            // ✅ 2. 🔥 ENVIAR IMÁGENES / ARCHIVOS (NUEVO)
+            if (attachments.length > 0) {
+                for (const att of attachments) {
+                    try {
+                        const fileUrl = att.data_url || att.file_url;
+
+                        if (!fileUrl) continue;
+
+                        console.log(`📷 Enviando archivo: ${fileUrl}`);
+
+                        await client.sendFile(entity, {
+                            file: fileUrl,
+                            caption: messageContent || "",
+                            forceDocument: false // 👈 se envía como imagen (no archivo)
+                        });
+
+                        console.log(`✅ Imagen enviada`);
+                    } catch (fileErr) {
+                        console.error(`❌ Error enviando archivo: ${fileErr.message}`);
+                    }
+                }
+            }
+
+            console.log(`✅ ✅ ✅ MENSAJE COMPLETO ENVIADO ✅ ✅ ✅`);
             
         } catch (err) {
             console.error(`❌ ERROR: ${err.message}`);
             try {
                 const entity = await client.getEntity(telegramChatId);
                 telegramEntityCache.set(telegramChatId, entity);
-                await client.sendMessage(entity, { message: messageContent });
+
+                if (messageContent) {
+                    await client.sendMessage(entity, { message: messageContent });
+                }
+
+                if (attachments.length > 0) {
+                    for (const att of attachments) {
+                        const fileUrl = att.data_url || att.file_url;
+                        if (fileUrl) {
+                            await client.sendFile(entity, {
+                                file: fileUrl,
+                                caption: messageContent || "",
+                                forceDocument: false
+                            });
+                        }
+                    }
+                }
+
                 console.log(`✅ Reintento exitoso`);
             } catch (err2) {
                 console.error(`❌ Reintento fallido: ${err2.message}`);
