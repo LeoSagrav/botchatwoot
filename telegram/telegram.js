@@ -19,7 +19,7 @@ const stringSession = new StringSession("1AQAOMTQ5LjE1NC4xNzUuNTUBu5uadHHIWkJbaB
 // === CONFIGURACIÓN CHATWOOT ===
 const CHATWOOT_URL = "https://chat.importadoramiranda.com".trim();
 const CHATWOOT_ACCOUNT_ID = 1;
-const CHATWOOT_INBOX_ID = 11;
+const CHATWOOT_INBOX_ID = 12;
 const CHATWOOT_API_TOKEN = "qgZitkvdxn6saxodq8SHoqDk";
 
 // === CACHES ===
