@@ -1,6 +1,7 @@
 const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const { NewMessage } = require("telegram/events");
+const { utils } = require("telegram");
 const express = require("express");
 const axios = require("axios");
 const fs = require("fs");
@@ -18,14 +19,14 @@ const stringSession = new StringSession("1AQAOMTQ5LjE1NC4xNzUuNTUBu5uadHHIWkJbaB
 // === CONFIGURACIÓN CHATWOOT ===
 const CHATWOOT_URL = "https://chat.importadoramiranda.com".trim();
 const CHATWOOT_ACCOUNT_ID = 1;
-const CHATWOOT_INBOX_ID = 12;
+const CHATWOOT_INBOX_ID = 11;
 const CHATWOOT_API_TOKEN = "qgZitkvdxn6saxodq8SHoqDk";
 
 // === CACHES ===
 const contactCache = new Map();
 const conversationCache = new Map();
 const telegramEntityCache = new Map();
-const telegramPhoneCache = new Map(); // ✅ NUEVO: cache de phone -> chatId
+const telegramPhoneCache = new Map();
 
 const client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -38,47 +39,61 @@ function getHeaders() {
     };
 }
 
-// === 🔑 RESOLVER ENTIDAD DE TELEGRAM (✅ FIX para nueva cuenta) ===
+// === 🔑 RESOLVER ENTIDAD DE TELEGRAM (✅ SOLUCIÓN ROBUSTA) ===
 async function resolveTelegramEntity(telegramChatId) {
     // 1️⃣ Cache primero
     if (telegramEntityCache.has(telegramChatId)) {
         return telegramEntityCache.get(telegramChatId);
     }
     
-    // 2️⃣ Intentar con ID numérico (puede fallar en cuenta nueva)
+    const numericId = parseInt(telegramChatId);
+    
+    // 2️⃣ Intentar con ID numérico
     try {
-        const entity = await client.getEntity(parseInt(telegramChatId));
+        const entity = await client.getEntity(numericId);
         telegramEntityCache.set(telegramChatId, entity);
         return entity;
     } catch (e) {
-        console.log(`⚠️ No se pudo resolver por ID ${telegramChatId}, intentando alternativas...`);
+        console.log(`⚠️ No se pudo resolver por ID ${telegramChatId}`);
     }
     
-    // 3️⃣ Intentar con número de teléfono (si lo tenemos en cache)
+    // 3️⃣ Intentar con phone desde cache
     if (telegramPhoneCache.has(telegramChatId)) {
         try {
             const phone = telegramPhoneCache.get(telegramChatId);
             const entity = await client.getEntity(phone);
             telegramEntityCache.set(telegramChatId, entity);
-            console.log(`✅ Entidad resuelta por phone: ${phone}`);
+            console.log(`✅ Entidad resuelta por phone cache: ${phone}`);
             return entity;
         } catch (e) {
-            console.log(`⚠️ No se pudo resolver por phone`);
+            console.log(`⚠️ No se pudo resolver por phone cache`);
         }
     }
     
-    // 4️⃣ Buscar en Chatwoot para obtener phone
+    // 4️⃣ Buscar phone en Chatwoot
     try {
         const contact = await findContactByTelegramId(telegramChatId);
         if (contact?.phone_number) {
             const entity = await client.getEntity(contact.phone_number);
             telegramEntityCache.set(telegramChatId, entity);
             telegramPhoneCache.set(telegramChatId, contact.phone_number);
-            console.log(`✅ Entidad resuelta desde Chatwoot phone: ${contact.phone_number}`);
+            console.log(`✅ Entidad resuelta desde Chatwoot: ${contact.phone_number}`);
             return entity;
         }
     } catch (e) {
         console.log(`⚠️ No se pudo obtener phone desde Chatwoot`);
+    }
+    
+    // 5️⃣ ✅ ÚLTIMO RECURSO: Usar PeerUser directo (funciona para enviar mensajes)
+    try {
+        console.log(`🔄 Usando PeerUser directo para ${telegramChatId}`);
+        const { PeerUser } = require("telegram/tl/core");
+        const peer = new PeerUser({ userId: BigInt(numericId) });
+        // Guardar peer como entidad fallback
+        telegramEntityCache.set(telegramChatId, peer);
+        return peer;
+    } catch (e) {
+        console.error(`❌ No se pudo crear PeerUser: ${e.message}`);
     }
     
     return null;
@@ -299,7 +314,7 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
         console.log(`   🆔 Chat ID: ${telegramChatId}`);
 
         try {
-            // ✅ FIX: Usar función robusta de resolución de entidad
+            // ✅ Usar función robusta de resolución
             let entity = await resolveTelegramEntity(telegramChatId);
             
             if (!entity) {
@@ -307,19 +322,18 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
                 return res.status(200).send("OK");
             }
 
-            // ✅ 1. Enviar TEXTO
+            // ✅ Enviar TEXTO
             if (messageContent) {
                 await client.sendMessage(entity, { message: messageContent });
                 console.log(`✅ Texto enviado`);
             }
 
-            // ✅ 2. Enviar IMÁGENES / ARCHIVOS
+            // ✅ Enviar ARCHIVOS
             if (attachments.length > 0) {
                 for (const att of attachments) {
                     try {
                         const fileUrl = att.data_url || att.file_url;
                         if (!fileUrl) continue;
-
                         console.log(`📷 Enviando archivo: ${fileUrl}`);
                         await client.sendFile(entity, {
                             file: fileUrl,
@@ -332,27 +346,20 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
                     }
                 }
             }
-
             console.log(`✅ ✅ ✅ MENSAJE COMPLETO ENVIADO ✅ ✅ ✅`);
             
         } catch (err) {
             console.error(`❌ ERROR: ${err.message}`);
-            // Reintento con resolución forzada
+            // Reintento
             try {
                 const entity = await resolveTelegramEntity(telegramChatId);
                 if (entity) {
-                    if (messageContent) {
-                        await client.sendMessage(entity, { message: messageContent });
-                    }
+                    if (messageContent) await client.sendMessage(entity, { message: messageContent });
                     if (attachments.length > 0) {
                         for (const att of attachments) {
                             const fileUrl = att.data_url || att.file_url;
                             if (fileUrl) {
-                                await client.sendFile(entity, {
-                                    file: fileUrl,
-                                    caption: messageContent || "",
-                                    forceDocument: false
-                                });
+                                await client.sendFile(entity, { file: fileUrl, caption: messageContent || "", forceDocument: false });
                             }
                         }
                     }
@@ -363,7 +370,6 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
             }
         }
     }
-    
     console.log("📡 === FIN ===\n");
     res.status(200).send("OK");
 });
@@ -386,14 +392,11 @@ app.post("/enviar-comprobante", async (req, res) => {
         tempFilePath = path.join(os.tmpdir(), `miranda_${pedidoId}.pdf`);
         fs.writeFileSync(tempFilePath, buffer);
 
-        // ✅ FIX: Resolver entidad robustamente para enviar-comprobante también
         let entity = telegramEntityCache.get(telefono);
         if (!entity) {
             entity = await resolveTelegramEntity(telefono);
         }
-        
         if (!entity) {
-            // Fallback: intentar con getEntity directo
             for (let i = 0; i < 3; i++) {
                 try {
                     entity = await client.getEntity(telefono);
@@ -430,6 +433,20 @@ app.post("/enviar-comprobante", async (req, res) => {
 (async () => {
     await client.start();
     
+    // ✅ POBLAR CACHE DE ENTIDADES al iniciar (CRÍTICO para cuenta nueva)
+    console.log(`🔄 Poblando cache de entidades...`);
+    try {
+        const dialogs = await client.getDialogs({ limit: 100 });
+        for (const dialog of dialogs) {
+            if (dialog.entity?.id) {
+                telegramEntityCache.set(dialog.entity.id.toString(), dialog.entity);
+            }
+        }
+        console.log(`✅ Cache poblado con ${telegramEntityCache.size} entidades`);
+    } catch (e) {
+        console.log(`⚠️ No se pudo poblar cache: ${e.message}`);
+    }
+    
     const me = await client.getMe();
     const BOT_OWNER_ID = me.id;
     
@@ -437,11 +454,10 @@ app.post("/enviar-comprobante", async (req, res) => {
     console.log("🔐 Usuario:", me.firstName);
     console.log("📱 Número: +", me.phone);
     console.log(`🆔 TU ID: ${BOT_OWNER_ID}`);
-    console.log("💡 Resolución de entidades mejorada para cuenta nueva");
+    console.log("💡 Entidades resueltas con fallback a PeerUser");
 
     client.addEventHandler(async (event) => {
         const message = event.message;
-        
         if (!message.isPrivate) return;
 
         const text = message.text || "";
@@ -458,8 +474,7 @@ app.post("/enviar-comprobante", async (req, res) => {
         const phoneNumber = sender?.phone ? `+${sender.phone}` : null;
 
         if (sender?.id) {
-            // ✅ FIX: Guardar entidad COMPLETA y phone para resolución futura
-            telegramEntityCache.set(chatId, sender);
+            telegramEntityCache.set(chatId.toString(), sender);
             if (phoneNumber) {
                 telegramPhoneCache.set(chatId.toString(), phoneNumber);
             }
@@ -474,6 +489,6 @@ app.post("/enviar-comprobante", async (req, res) => {
         console.log(`\n🚀 Bridge en http://localhost:${PORT}`);
         console.log(`📡 Webhook: http://localhost:${PORT}/webhook/chatwoot-telegram`);
         console.log(`📦 Comprobantes: http://localhost:${PORT}/enviar-comprobante`);
-        console.log(`✅ Listo - Entidades resueltas correctamente`);
+        console.log(`✅ Listo - Entidades con fallback PeerUser`);
     });
 })();
