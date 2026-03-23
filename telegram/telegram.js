@@ -89,9 +89,18 @@ async function createOrUpdateContact(phoneNumber, firstName, telegramChatId) {
             contactData,
             { headers: getHeaders() }
         );
+        
+        // ✅ FIX: Esperar y refrescar para obtener contact_inboxes con source_id válido
+        await sleep(400);
+        const refreshed = await axios.get(
+            `${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/contacts/${response.data.id}`,
+            { headers: getHeaders() }
+        );
+        
         console.log(`✅ Contacto creado: ${telegramChatId}`);
-        contactCache.set(cacheKey, response.data);
-        return response.data;
+        contactCache.set(cacheKey, refreshed.data);
+        return refreshed.data;
+        
     } catch (error) {
         const errorMsg = error.response?.data?.message || error.message;
         if (errorMsg.includes('Identifier has already been taken')) {
@@ -108,13 +117,32 @@ async function createOrUpdateContact(phoneNumber, firstName, telegramChatId) {
 }
 
 // === 🔑 OBTENER SOURCE_ID ===
-function getSourceIdForInbox(contact, inboxId) {
+async function getSourceIdForInbox(contact, inboxId) {
     if (contact?.contact_inboxes?.length > 0) {
         const inboxLink = contact.contact_inboxes.find(
             ci => ci.inbox?.id === inboxId || ci.inbox_id === inboxId
         );
         if (inboxLink?.source_id) return inboxLink.source_id;
     }
+    
+    // ✅ FIX: Si contact_inboxes está vacío, refrescar y reintentar
+    await sleep(300);
+    try {
+        const refreshed = await axios.get(
+            `${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/contacts/${contact?.id}`,
+            { headers: getHeaders() }
+        );
+        if (refreshed.data?.contact_inboxes?.length > 0) {
+            const inboxLink = refreshed.data.contact_inboxes.find(
+                ci => ci.inbox?.id === inboxId || ci.inbox_id === inboxId
+            );
+            if (inboxLink?.source_id) return inboxLink.source_id;
+        }
+    } catch (e) {
+        console.error(`⚠️ Error refrescando contacto:`, e.message);
+    }
+    
+    // Fallback
     if (contact?.identifier) return contact.identifier;
     if (contact?.custom_attributes?.telegram_chat_id) return contact.custom_attributes.telegram_chat_id;
     return null;
@@ -144,7 +172,7 @@ async function findActiveConversation(contactId, telegramChatId) {
 // === CREAR CONVERSACIÓN ===
 async function createConversation(contact, telegramChatId) {
     try {
-        const sourceId = getSourceIdForInbox(contact, CHATWOOT_INBOX_ID);
+        const sourceId = await getSourceIdForInbox(contact, CHATWOOT_INBOX_ID);
         if (!sourceId) return null;
 
         const requestData = {
