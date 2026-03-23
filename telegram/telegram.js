@@ -10,10 +10,10 @@ const os = require("os");
 const app = express();
 app.use(express.json({ limit: '100mb' }));
 
-// === CONFIGURACIÓN TELEGRAM ===
-const apiId = 36247985;
-const apiHash = "9ad4cceefe978c0cd347c14158138699";
-const stringSession = new StringSession("1AQAOMTQ5LjE1NC4xNzUuNTUBuxP1BUARWXj7q5ORYhVn88FbuovYm2aECqrNKsXlTjm5m4Y428A/5gcWPnfbsk9WmfPdAiAwP+cv3/7hW9WkLDybAHiOwzE+PKdHZLJYbUp4j2mjQcuZ81B52JUgvAkhewGh3Uy9tOJrHReTZeq2jZwbQqCuvHYtiqt7gHC7bNYMpSJYiNVU1svOxOlnYGCiB3dMp5+ucaYpRYN+LvpQVY99KYO0++k3xHtrt7O+EjIEOuBZaVwtcen6ys07kFh+ZiEsxWadu4g0hZMqe+BXvxpWNNpX9YwL8W+pxmN0NJQIm2vhUUy26wI2mm73BF+XsqNreiSU0FpTn5bo+/VkeF4=");
+// === CONFIGURACIÓN TELEGRAM (TU NÚMERO PERSONAL) ===
+const apiId = 39897045;
+const apiHash = "a5aff9fd7ed70051b207c325363f5bfd";
+const stringSession = new StringSession("1AQAOMTQ5LjE1NC4xNzUuNTUBu5uadHHIWkJbaBHsVYx7x0jPZzhRNbpeDGrUSu67BhaSvPNJJYTX6IV/ZcfbjrSsu/m6teNtrb5Ce6hXH557mJVmPGzzeyg2sS/g+Ud346w9xUl0Dbgxtm/57d6vowqNxaj1gvbHFt86dnQ9ynDkyyBRrs1QEQXr9Tt5wIJwnbj7ObyCvsDG/x39x05d0m9KTqyFFsnUxrME6dAK0Y/ph/zAba8TrQuUuSi5DiO1gFO2W7HMBUQG01nFYgsaHpglZs1SDFvo7LOg8R8vaDEXDSdeM3TefxQHLcekbYCx7cjMDFgGCLC4LsDjKvJUeTsQ7qBYG2MMi3yuTKuNtioh1Rg=");
 
 // === CONFIGURACIÓN CHATWOOT ===
 const CHATWOOT_URL = "https://chat.importadoramiranda.com".trim();
