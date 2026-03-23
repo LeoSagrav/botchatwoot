@@ -10,7 +10,7 @@ const os = require("os");
 const app = express();
 app.use(express.json({ limit: '100mb' }));
 
-// === CONFIGURACIÓN TELEGRAM (TU NÚMERO PERSONAL) ===
+// === CONFIGURACIÓN TELEGRAM ===
 const apiId = 39897045;
 const apiHash = "a5aff9fd7ed70051b207c325363f5bfd";
 const stringSession = new StringSession("1AQAOMTQ5LjE1NC4xNzUuNTUBu5uadHHIWkJbaBHsVYx7x0jPZzhRNbpeDGrUSu67BhaSvPNJJYTX6IV/ZcfbjrSsu/m6teNtrb5Ce6hXH557mJVmPGzzeyg2sS/g+Ud346w9xUl0Dbgxtm/57d6vowqNxaj1gvbHFt86dnQ9ynDkyyBRrs1QEQXr9Tt5wIJwnbj7ObyCvsDG/x39x05d0m9KTqyFFsnUxrME6dAK0Y/ph/zAba8TrQuUuSi5DiO1gFO2W7HMBUQG01nFYgsaHpglZs1SDFvo7LOg8R8vaDEXDSdeM3TefxQHLcekbYCx7cjMDFgGCLC4LsDjKvJUeTsQ7qBYG2MMi3yuTKuNtioh1Rg=");
@@ -25,6 +25,7 @@ const CHATWOOT_API_TOKEN = "qgZitkvdxn6saxodq8SHoqDk";
 const contactCache = new Map();
 const conversationCache = new Map();
 const telegramEntityCache = new Map();
+const telegramPhoneCache = new Map(); // ✅ NUEVO: cache de phone -> chatId
 
 const client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -35,6 +36,52 @@ function getHeaders() {
         'api_access_token': CHATWOOT_API_TOKEN,
         'Content-Type': 'application/json'
     };
+}
+
+// === 🔑 RESOLVER ENTIDAD DE TELEGRAM (✅ FIX para nueva cuenta) ===
+async function resolveTelegramEntity(telegramChatId) {
+    // 1️⃣ Cache primero
+    if (telegramEntityCache.has(telegramChatId)) {
+        return telegramEntityCache.get(telegramChatId);
+    }
+    
+    // 2️⃣ Intentar con ID numérico (puede fallar en cuenta nueva)
+    try {
+        const entity = await client.getEntity(parseInt(telegramChatId));
+        telegramEntityCache.set(telegramChatId, entity);
+        return entity;
+    } catch (e) {
+        console.log(`⚠️ No se pudo resolver por ID ${telegramChatId}, intentando alternativas...`);
+    }
+    
+    // 3️⃣ Intentar con número de teléfono (si lo tenemos en cache)
+    if (telegramPhoneCache.has(telegramChatId)) {
+        try {
+            const phone = telegramPhoneCache.get(telegramChatId);
+            const entity = await client.getEntity(phone);
+            telegramEntityCache.set(telegramChatId, entity);
+            console.log(`✅ Entidad resuelta por phone: ${phone}`);
+            return entity;
+        } catch (e) {
+            console.log(`⚠️ No se pudo resolver por phone`);
+        }
+    }
+    
+    // 4️⃣ Buscar en Chatwoot para obtener phone
+    try {
+        const contact = await findContactByTelegramId(telegramChatId);
+        if (contact?.phone_number) {
+            const entity = await client.getEntity(contact.phone_number);
+            telegramEntityCache.set(telegramChatId, entity);
+            telegramPhoneCache.set(telegramChatId, contact.phone_number);
+            console.log(`✅ Entidad resuelta desde Chatwoot phone: ${contact.phone_number}`);
+            return entity;
+        }
+    } catch (e) {
+        console.log(`⚠️ No se pudo obtener phone desde Chatwoot`);
+    }
+    
+    return null;
 }
 
 // === BUSCAR CONTACTO POR TELEGRAM ID ===
@@ -252,35 +299,33 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
         console.log(`   🆔 Chat ID: ${telegramChatId}`);
 
         try {
-            let entity = telegramEntityCache.get(telegramChatId);
+            // ✅ FIX: Usar función robusta de resolución de entidad
+            let entity = await resolveTelegramEntity(telegramChatId);
+            
             if (!entity) {
-                console.log(`🔍 Resolviendo entidad...`);
-                entity = await client.getEntity(telegramChatId);
-                telegramEntityCache.set(telegramChatId, entity);
+                console.error(`❌ No se pudo resolver entidad para ${telegramChatId}`);
+                return res.status(200).send("OK");
             }
 
-            // ✅ 1. Enviar TEXTO (igual que antes)
+            // ✅ 1. Enviar TEXTO
             if (messageContent) {
                 await client.sendMessage(entity, { message: messageContent });
                 console.log(`✅ Texto enviado`);
             }
 
-            // ✅ 2. 🔥 ENVIAR IMÁGENES / ARCHIVOS (NUEVO)
+            // ✅ 2. Enviar IMÁGENES / ARCHIVOS
             if (attachments.length > 0) {
                 for (const att of attachments) {
                     try {
                         const fileUrl = att.data_url || att.file_url;
-
                         if (!fileUrl) continue;
 
                         console.log(`📷 Enviando archivo: ${fileUrl}`);
-
                         await client.sendFile(entity, {
                             file: fileUrl,
                             caption: messageContent || "",
-                            forceDocument: false // 👈 se envía como imagen (no archivo)
+                            forceDocument: false
                         });
-
                         console.log(`✅ Imagen enviada`);
                     } catch (fileErr) {
                         console.error(`❌ Error enviando archivo: ${fileErr.message}`);
@@ -292,28 +337,27 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
             
         } catch (err) {
             console.error(`❌ ERROR: ${err.message}`);
+            // Reintento con resolución forzada
             try {
-                const entity = await client.getEntity(telegramChatId);
-                telegramEntityCache.set(telegramChatId, entity);
-
-                if (messageContent) {
-                    await client.sendMessage(entity, { message: messageContent });
-                }
-
-                if (attachments.length > 0) {
-                    for (const att of attachments) {
-                        const fileUrl = att.data_url || att.file_url;
-                        if (fileUrl) {
-                            await client.sendFile(entity, {
-                                file: fileUrl,
-                                caption: messageContent || "",
-                                forceDocument: false
-                            });
+                const entity = await resolveTelegramEntity(telegramChatId);
+                if (entity) {
+                    if (messageContent) {
+                        await client.sendMessage(entity, { message: messageContent });
+                    }
+                    if (attachments.length > 0) {
+                        for (const att of attachments) {
+                            const fileUrl = att.data_url || att.file_url;
+                            if (fileUrl) {
+                                await client.sendFile(entity, {
+                                    file: fileUrl,
+                                    caption: messageContent || "",
+                                    forceDocument: false
+                                });
+                            }
                         }
                     }
+                    console.log(`✅ Reintento exitoso`);
                 }
-
-                console.log(`✅ Reintento exitoso`);
             } catch (err2) {
                 console.error(`❌ Reintento fallido: ${err2.message}`);
             }
@@ -342,8 +386,14 @@ app.post("/enviar-comprobante", async (req, res) => {
         tempFilePath = path.join(os.tmpdir(), `miranda_${pedidoId}.pdf`);
         fs.writeFileSync(tempFilePath, buffer);
 
+        // ✅ FIX: Resolver entidad robustamente para enviar-comprobante también
         let entity = telegramEntityCache.get(telefono);
         if (!entity) {
+            entity = await resolveTelegramEntity(telefono);
+        }
+        
+        if (!entity) {
+            // Fallback: intentar con getEntity directo
             for (let i = 0; i < 3; i++) {
                 try {
                     entity = await client.getEntity(telefono);
@@ -387,41 +437,35 @@ app.post("/enviar-comprobante", async (req, res) => {
     console.log("🔐 Usuario:", me.firstName);
     console.log("📱 Número: +", me.phone);
     console.log(`🆔 TU ID: ${BOT_OWNER_ID}`);
-    console.log("💡 Tus mensajes se sincronizarán como 'outgoing'");
+    console.log("💡 Resolución de entidades mejorada para cuenta nueva");
 
     client.addEventHandler(async (event) => {
         const message = event.message;
         
-        // ✅ FILTRO 1: Solo mensajes privados
-        if (!message.isPrivate) {
-            return;
-        }
+        if (!message.isPrivate) return;
 
         const text = message.text || "";
         const chatId = message.chatId;
         const sender = message.sender;
         
-        // ✅ FILTRO 2: Detectar si es mensaje TUYO o del cliente
         if (message.out) {
-            // ✅ Es TU mensaje → Sincronizar como "outgoing"
             console.log(`📤 [Telegram] Tu mensaje a ${chatId}: ${text.substring(0, 50)}`);
-            
-            // Sincronizar como mensaje saliente (outgoing)
             await sendToChatwoot(chatId, text, me.firstName || "Agente", "outgoing", null);
             return;
         }
 
-        // ✅ Es mensaje del CLIENTE → Sincronizar como "incoming"
         const senderName = sender?.firstName || "Usuario";
         const phoneNumber = sender?.phone ? `+${sender.phone}` : null;
 
         if (sender?.id) {
+            // ✅ FIX: Guardar entidad COMPLETA y phone para resolución futura
             telegramEntityCache.set(chatId, sender);
+            if (phoneNumber) {
+                telegramPhoneCache.set(chatId.toString(), phoneNumber);
+            }
         }
 
         console.log(`📨 [Telegram] ${senderName} (${chatId}): ${text.substring(0, 50)}`);
-        
-        // Sincronizar como mensaje entrante (incoming)
         await sendToChatwoot(chatId, text, senderName, "incoming", phoneNumber);
     }, new NewMessage({}));
 
@@ -430,6 +474,6 @@ app.post("/enviar-comprobante", async (req, res) => {
         console.log(`\n🚀 Bridge en http://localhost:${PORT}`);
         console.log(`📡 Webhook: http://localhost:${PORT}/webhook/chatwoot-telegram`);
         console.log(`📦 Comprobantes: http://localhost:${PORT}/enviar-comprobante`);
-        console.log(`✅ Listo - Mensajes bidireccionales sincronizados`);
+        console.log(`✅ Listo - Entidades resueltas correctamente`);
     });
 })();
