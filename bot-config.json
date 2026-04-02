@@ -1,7 +1,7 @@
 {
   "menus": {
     "principal": {
-      "greeting": "¡Hola! 👋 Bienvenido a Importadora Miranda\n\n¿En qué puedo ayudarte? Responde con el número:\n\n1️⃣ Saber ubicación\n2️⃣ Consultas de pedidos\n3️⃣ Hablar con un asesor\n4️⃣ Realizar mi Pedido live\n5️⃣ Verificar mi pedido\n6️⃣ Lugares de envío\n7️⃣ Reclamos",
+      "greeting": "¡Hola! 👋 Bienvenido a Importadora Miranda\n\n¿En qué puedo ayudarte? Responde con el número:\n\n1️⃣ Saber ubicación\n2️⃣ Consultas de pedidos\n3️⃣ Hablar con un asesor\n4️⃣ Realizar mi Pedido live\n5️⃣ Verificar mi pedido\n6️⃣ Lugares de envío\n7️⃣ Reclamos \n 🕐 *Horarios de Atención:*\n\n📅 Lunes a Sábado: 9:30 AM - 8:00 PM\n🎉 Domingos y Feriados: Cerrado\n\n⚠️ *En días feriados, por favor consulta con un asesor para confirmar disponibilidad.*",
       "options": {
         "1": {
           "message": "📍 *Nuestra Ubicación:*\n\nCaparazón Mall Center Planta Baja\nLocal Nº29 Pleno Puente Vita\n\n🕐 Horario: Lun-Sab 9:30-21:00\n\n🗺️ Mapa: https://shop.importadoramiranda.com/about#map-section  ",
