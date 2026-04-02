@@ -8,6 +8,9 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
+// ✅ Importar helper de etiquetas (versión robusta)
+const { syncLabels } = require('./utils/labels');
+
 const app = express();
 app.use(express.json({ limit: '100mb' }));
 
@@ -282,6 +285,11 @@ async function sendToChatwoot(telegramChatId, messageText, senderName = "Usuario
             { headers: getHeaders() }
         );
         console.log(`📨 Mensaje sincronizado (Conv: ${conversationId})`);
+        
+        // 🏷️ Si es mensaje entrante de usuario, asegurar etiqueta 'bot' (nueva firma)
+        if (messageType === 'incoming') {
+            await syncLabels(CHATWOOT_ACCOUNT_ID, conversationId, { add: ['bot'] });
+        }
     } catch (error) {
         if (error.response?.status === 404) {
             conversationCache.delete(telegramChatId);
@@ -303,8 +311,10 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
     const messageContent = event.content;
     const telegramChatId = event.conversation?.custom_attributes?.telegram_chat_id;
     const attachments = event.attachments || [];
+    const senderType = event.sender_type;
     
     console.log(`🔍 messageType: ${messageType} → isOutgoing: ${isOutgoing}`);
+    console.log(`🔍 sender_type: ${senderType}`);
     console.log(`🔍 content: "${messageContent?.substring(0, 50)}"`);
     console.log(`🔍 telegram_chat_id: ${telegramChatId}`);
     console.log(`🔍 attachments: ${attachments.length}`);
@@ -347,6 +357,12 @@ app.post("/webhook/chatwoot-telegram", async (req, res) => {
                 }
             }
             console.log(`✅ ✅ ✅ MENSAJE COMPLETO ENVIADO ✅ ✅ ✅`);
+            
+            // 🏷️ Si el mensaje fue enviado por un agente humano, actualizar etiqueta (nueva firma)
+            if (senderType === 'user') {
+                await syncLabels(CHATWOOT_ACCOUNT_ID, event.conversation?.id, { add: ['asesor'] });
+                console.log(`🏷️ Etiqueta 'asesor' aplicada (agente respondió)`);
+            }
             
         } catch (err) {
             console.error(`❌ ERROR: ${err.message}`);
@@ -419,6 +435,13 @@ app.post("/enviar-comprobante", async (req, res) => {
 
         const chatId = entity.id || telefono;
         await sendToChatwoot(chatId, `📄 Comprobante #${pedidoId} enviado`, "Sistema", "outgoing");
+        
+        // 🏷️ Etiquetar como asesor (comprobante enviado por sistema/agente) - nueva firma
+        const convId = conversationCache.get(telefono);
+        if (convId) {
+            await syncLabels(CHATWOOT_ACCOUNT_ID, convId, { add: ['asesor'] });
+        }
+        
         console.log(`✅ PDF enviado`);
         res.json({ success: true });
     } catch (error) {
@@ -455,6 +478,7 @@ app.post("/enviar-comprobante", async (req, res) => {
     console.log("📱 Número: +", me.phone);
     console.log(`🆔 TU ID: ${BOT_OWNER_ID}`);
     console.log("💡 Entidades resueltas con fallback a PeerUser");
+    console.log("🏷️ Etiquetas integradas: bot, asesor, express, reclamos");
 
     client.addEventHandler(async (event) => {
         const message = event.message;
@@ -489,6 +513,6 @@ app.post("/enviar-comprobante", async (req, res) => {
         console.log(`\n🚀 Bridge en http://localhost:${PORT}`);
         console.log(`📡 Webhook: http://localhost:${PORT}/webhook/chatwoot-telegram`);
         console.log(`📦 Comprobantes: http://localhost:${PORT}/enviar-comprobante`);
-        console.log(`✅ Listo - Entidades con fallback PeerUser`);
+        console.log(`✅ Listo - Entidades con fallback PeerUser + Etiquetas`);
     });
 })();
