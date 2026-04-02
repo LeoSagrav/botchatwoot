@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { getState, setState, clearState, markAsHandoff, isHandedOff, releaseHandoff, getExpiredHandoffs } = require('./utils/conversation-state');
-const { syncLabels } = require('./utils/labels');
+const { setSingleLabel, getCurrentLabel } = require('./utils/labels');
 
 const app = express();
 const PORT = process.env.PORT || 3030;
@@ -21,6 +21,9 @@ app.use(bodyParser.json());
 
 // ⏱️ Configuración de timeout para handoff (en minutos)
 const HANDOFF_TIMEOUT_MIN = parseInt(process.env.HANDOFF_TIMEOUT_MINUTES) || 30;
+
+// Etiquetas que indican atención humana (el bot debe respetarlas)
+const HUMAN_LABELS = ['asesor', 'reclamos', 'express'];
 
 // Función para limpiar HTML
 function cleanText(text) {
@@ -104,8 +107,8 @@ async function sendQRPaymentFlow(accountId, conversationId) {
     );
     console.log('✅ Mensaje de pago enviado');
     
-    // 🏷️ Etiquetar como bot activo (nueva firma)
-    await syncLabels(accountId, conversationId, { add: ['bot'] });
+    // 🏷️ Etiquetar como 'bot' (única etiqueta)
+    await setSingleLabel(accountId, conversationId, 'bot');
     
   } catch (error) {
     console.error('❌ Error enviando QR payment:');
@@ -115,7 +118,7 @@ async function sendQRPaymentFlow(accountId, conversationId) {
     try {
       const fallbackMessage = `📱 Escanea este QR para pagar tu pedido\n\n🔗 ${botConfig.media?.qrPayment?.url?.trim()}\n\n${botConfig.messages.qrPayment}`;
       await sendMessage(accountId, conversationId, fallbackMessage);
-      await syncLabels(accountId, conversationId, { add: ['bot'] });
+      await setSingleLabel(accountId, conversationId, 'bot');
       console.log('✅ Fallback enviado correctamente');
     } catch (fallbackError) {
       console.error('❌ Error en fallback:', fallbackError.message);
@@ -130,8 +133,8 @@ async function sendReclamosFlow(accountId, conversationId, contactId) {
   try {
     await sendMessage(accountId, conversationId, botConfig.messages.reclamosInstructions);
     
-    // 🏷️ Actualizar etiquetas: agregar asesor + reclamos (nueva firma)
-    await syncLabels(accountId, conversationId, { add: ['asesor', 'reclamos'] });
+    // 🏷️ Establecer etiqueta única: 'reclamos' (implica handoff)
+    await setSingleLabel(accountId, conversationId, 'reclamos');
     
     try {
       await axios.patch(
@@ -206,7 +209,7 @@ async function sendReclamosFlow(accountId, conversationId, contactId) {
   } catch (error) {
     console.error('❌ Error en flujo de reclamos:', error.message);
     markAsHandoff(accountId, conversationId);
-    await syncLabels(accountId, conversationId, { add: ['asesor', 'reclamos'] });
+    await setSingleLabel(accountId, conversationId, 'reclamos');
     console.log('⚠️ Handoff forzado por error');
   }
 }
@@ -218,8 +221,8 @@ async function sendExpressFlow(accountId, conversationId, contactId) {
   try {
     await sendMessage(accountId, conversationId, botConfig.messages.expressInstructions);
     
-    // 🏷️ Actualizar etiquetas: agregar asesor + express (nueva firma)
-    await syncLabels(accountId, conversationId, { add: ['asesor', 'express'] });
+    // 🏷️ Establecer etiqueta única: 'express' (implica handoff)
+    await setSingleLabel(accountId, conversationId, 'express');
     
     try {
       await axios.patch(
@@ -295,7 +298,7 @@ async function sendExpressFlow(accountId, conversationId, contactId) {
   } catch (error) {
     console.error('❌ Error en flujo Express:', error.message);
     markAsHandoff(accountId, conversationId);
-    await syncLabels(accountId, conversationId, { add: ['asesor', 'express'] });
+    await setSingleLabel(accountId, conversationId, 'express');
     console.log('⚠️ Handoff forzado por error en Express');
   }
 }
@@ -330,10 +333,17 @@ async function sendMessage(accountId, conversationId, content) {
   }
 }
 
-// Wrapper para enviar mensaje y etiquetar como bot
+// ✅ Wrapper para enviar mensaje y etiquetar como 'bot' (SOLO si no hay etiqueta humana)
 async function sendBotMessage(accountId, conversationId, content) {
+  // 🔴 Validar: si tiene etiqueta humana, NO enviar mensaje ni cambiar etiqueta
+  const currentLabel = await getCurrentLabel(accountId, conversationId);
+  if (currentLabel && HUMAN_LABELS.includes(currentLabel)) {
+    console.log(`⏭️ Conv #${conversationId} tiene etiqueta '${currentLabel}' - Bot omitiendo respuesta`);
+    return;
+  }
+  
   await sendMessage(accountId, conversationId, content);
-  await syncLabels(accountId, conversationId, { add: ['bot'] });
+  await setSingleLabel(accountId, conversationId, 'bot');
 }
 
 // Handoff a asesor humano
@@ -344,8 +354,8 @@ async function sendHandoff(accountId, conversationId, contactId) {
     // 1. Marcar en memoria PRIMERO
     markAsHandoff(accountId, conversationId);
     
-    // 2. 🏷️ Actualizar etiquetas: remover bot, agregar asesor (nueva firma)
-    await syncLabels(accountId, conversationId, { add: ['asesor'], remove: ['bot'] });
+    // 2. 🏷️ Establecer etiqueta única: 'asesor' (reemplaza cualquier otra)
+    await setSingleLabel(accountId, conversationId, 'asesor');
     
     // 3. Enviar mensaje de confirmación al usuario
     await sendMessage(accountId, conversationId, botConfig.messages.handoffConfirmation);
@@ -398,42 +408,34 @@ async function sendHandoff(accountId, conversationId, contactId) {
   } catch (error) {
     console.error('❌ Error en handoff:', error.message);
     markAsHandoff(accountId, conversationId);
-    await syncLabels(accountId, conversationId, { add: ['asesor'], remove: ['bot'] });
+    await setSingleLabel(accountId, conversationId, 'asesor');
   }
 }
 
 // ============================================================================
-// 🔍 Verificación de etiquetas para auto-release de handoff (sistema 4 etiquetas)
+// 🔍 Verificación de etiquetas para auto-release de handoff (etiquetas únicas)
 // ============================================================================
 
 async function checkAndReleaseHandoffIfNoLabels(accountId, conversationId) {
-  // Etiquetas que mantienen el handoff activo
-  const handoffLabels = ['asesor', 'reclamos', 'express'];
-  
   try {
-    const response = await axios.get(
-      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}`,
-      {
-        headers: {
-          'api_access_token': process.env.CHATWOOT_TOKEN,
-          'Content-Type': 'application/json'
-        },
-        timeout: 8000
-      }
-    );
-    const currentLabels = response.data.labels || [];
-    const hasHandoffLabel = currentLabels.some(label => 
-      handoffLabels.includes(label.toLowerCase())
-    );
+    const currentLabel = await getCurrentLabel(accountId, conversationId);
     
-    if (!hasHandoffLabel && isHandedOff(accountId, conversationId)) {
-      console.log(`🔓 Liberando handoff para conv ${conversationId} - Etiquetas: [${currentLabels.join(', ')}]`);
+    // Si NO tiene etiqueta humana Y está en handoff → liberar
+    if (!currentLabel && isHandedOff(accountId, conversationId)) {
+      console.log(`🔓 Liberando handoff para conv ${conversationId} - Sin etiqueta activa`);
       releaseHandoff(accountId, conversationId);
       return true;
     }
+    
+    // Si tiene etiqueta 'bot' → ya está liberado
+    if (currentLabel === 'bot' && isHandedOff(accountId, conversationId)) {
+      releaseHandoff(accountId, conversationId);
+      return true;
+    }
+    
     return false;
   } catch (error) {
-    console.error(`⚠️ Error verificando etiquetas para conv ${conversationId}:`, error.message);
+    console.error(`⚠️ Error verificando etiqueta para conv ${conversationId}:`, error.message);
     return false;
   }
 }
@@ -448,11 +450,19 @@ async function checkHandoffTimeouts() {
 
   for (const key of expired) {
     const [accountId, conversationId] = key.split('_');
+    
+    // 🔴 Validar: si aún tiene etiqueta humana, NO liberar (el vendedor está atendiendo)
+    const currentLabel = await getCurrentLabel(accountId, conversationId);
+    if (currentLabel && HUMAN_LABELS.includes(currentLabel)) {
+      console.log(`⏭️ Conv #${conversationId} mantiene etiqueta '${currentLabel}' - Timeout ignorado`);
+      continue;
+    }
+    
     console.log(`⏱️ Timeout handoff: conv ${conversationId} - Bot retoma control`);
     
     try {
-      // 1️⃣ Volver etiquetas a bot (nueva firma: agregar bot, remover asesor/otros)
-      await syncLabels(accountId, conversationId, { add: ['bot'], remove: ['asesor', 'reclamos', 'express'] });
+      // 1️⃣ Establecer etiqueta única: 'bot'
+      await setSingleLabel(accountId, conversationId, 'bot');
       
       // 2️⃣ Liberar en memoria
       releaseHandoff(accountId, conversationId);
@@ -516,10 +526,18 @@ app.post('/webhook/chatwoot', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // 🔥 Verificar si ya fue transferida a humano (CON VERIFICACIÓN DE ETIQUETAS)
+    // 🔥 Verificar si ya fue transferida a humano (CON VERIFICACIÓN DE ETIQUETA ÚNICA)
     if (isHandedOff(accountId, conversationId)) {
-      const released = await checkAndReleaseHandoffIfNoLabels(accountId, conversationId);
+      const currentLabel = await getCurrentLabel(accountId, conversationId);
       
+      // 🔴 Si tiene etiqueta humana, el bot NO responde
+      if (currentLabel && HUMAN_LABELS.includes(currentLabel)) {
+        console.log(`🤐 Conv #${conversationId} con etiqueta '${currentLabel}' - Bot silenciado`);
+        return res.sendStatus(200);
+      }
+      
+      // Si no tiene etiqueta humana, verificar si liberar
+      const released = await checkAndReleaseHandoffIfNoLabels(accountId, conversationId);
       if (!released) {
         console.log(`⏭️ Conversación ${conversationId} mantiene handoff - Bot ignorando`);
         return res.sendStatus(200);
@@ -663,8 +681,8 @@ app.listen(PORT, () => {
   console.log('📡 Webhook: /webhook/chatwoot');
   console.log('🔗 Chatwoot: ' + process.env.CHATWOOT_URL);
   console.log('✅ Health: http://localhost:' + PORT + '/health\n');
-  console.log('🏷️ Sistema de etiquetas: bot, asesor, express, reclamos');
-  console.log(`⏱️ Timeout handoff: ${HANDOFF_TIMEOUT_MIN} minutos`);
+  console.log('🏷️ Sistema de etiquetas ÚNICAS: bot | asesor | express | reclamos');
+  console.log(`⏱️ Timeout handoff: ${HANDOFF_TIMEOUT_MIN} minutos (respeta etiquetas humanas)`);
   console.log('⚙️ Configuración:');
   console.log('  Account ID:', process.env.CHATWOOT_ACCOUNT_ID);
   console.log('  QR Payment URL:', botConfig.media?.qrPayment?.url || 'No configurado');
