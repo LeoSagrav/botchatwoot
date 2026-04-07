@@ -85,6 +85,10 @@
     "qrPayment": {
       "url": "https://importadoramiranda.com/images/QR.jpeg  ",
       "caption": "📱 Escanea este QR para pagar tu pedido"
+    },
+    "mirandaAudio": {
+      "filename": "audio.mp3",
+      "caption": "🎵 Mensaje de voz de Miranda"
     }
   }
 }

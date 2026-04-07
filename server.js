@@ -4,6 +4,7 @@ const axios = require('axios');
 const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
+const FormData = require('form-data');
 
 const { getState, setState, clearState, markAsHandoff, isHandedOff, releaseHandoff, getExpiredHandoffs } = require('./utils/conversation-state');
 const { setSingleLabel, getCurrentLabel } = require('./utils/labels');
@@ -111,7 +112,6 @@ async function sendQRPaymentFlow(accountId, conversationId) {
         const imageResponse = await axios.get(cleanUrl, { responseType: 'arraybuffer', timeout: 10000 });
         const imageBuffer = Buffer.from(imageResponse.data);
         const contentType = imageResponse.headers['content-type'] || 'image/jpeg';
-        const FormData = require('form-data');
         const form = new FormData();
         form.append('content', qrConfig.caption || '📱 Código QR para pago');
         form.append('message_type', 'outgoing');
@@ -129,6 +129,11 @@ async function sendQRPaymentFlow(accountId, conversationId) {
         throw binaryError;
       }
     }
+    
+    await new Promise(resolve => setTimeout(resolve, 800));
+    
+    // 🎵 Enviar audio de Miranda
+    await sendAudioFile(accountId, conversationId);
     
     await new Promise(resolve => setTimeout(resolve, 800));
     
@@ -154,6 +159,66 @@ async function sendQRPaymentFlow(accountId, conversationId) {
       console.log('✅ Fallback enviado correctamente');
     } catch (fallbackError) {
       console.error('❌ Error en fallback:', fallbackError.message);
+    }
+  }
+}
+
+// 🎵 Función para enviar un archivo de audio local
+async function sendAudioFile(accountId, conversationId) {
+  console.log(`🎵 [AUDIO] Iniciando envío de audio a conv ${conversationId}`);
+  
+  try {
+    const audioConfig = botConfig.media?.mirandaAudio;
+    if (!audioConfig?.filename) {
+      console.error('❌ [AUDIO] Nombre de archivo de audio no configurado en bot-config.json');
+      return;
+    }
+
+    const audioPath = path.join(__dirname, 'audio', audioConfig.filename);
+    
+    if (!fs.existsSync(audioPath)) {
+      console.error(`❌ [AUDIO] El archivo de audio no existe en el disco: ${audioPath}`);
+      return;
+    }
+
+    // Leer el archivo como Buffer para asegurar la integridad de los datos binarios
+    const audioBuffer = fs.readFileSync(audioPath);
+    console.log(`📊 [AUDIO] Tamaño del archivo: ${audioBuffer.length} bytes`);
+
+    const form = new FormData();
+    form.append('content', audioConfig.caption || '🎵 Mensaje de voz');
+    form.append('message_type', 'outgoing');
+    form.append('private', 'false');
+    
+    // Adjuntar archivo con metadatos completos y conocidos
+    form.append('attachments[]', audioBuffer, {
+      filename: audioConfig.filename,
+      contentType: 'audio/mpeg',
+      knownLength: audioBuffer.length
+    });
+
+    console.log('📤 [AUDIO] Enviando petición a Chatwoot...');
+    const response = await axios.post(
+      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+      form,
+      { 
+        headers: { 
+          'api_access_token': process.env.CHATWOOT_TOKEN, 
+          ...form.getHeaders() 
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
+      }
+    );
+    
+    console.log(`✅ [AUDIO] Mensaje de audio enviado. Status: ${response.status}`);
+  } catch (error) {
+    console.error('❌ [AUDIO] Error al enviar audio:');
+    if (error.response) {
+      console.error(`  - Status: ${error.response.status}`);
+      console.error(`  - Datos Error: ${JSON.stringify(error.response.data)}`);
+    } else {
+      console.error(`  - Mensaje: ${error.message}`);
     }
   }
 }
