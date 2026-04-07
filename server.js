@@ -7,6 +7,7 @@ const path = require('path');
 
 const { getState, setState, clearState, markAsHandoff, isHandedOff, releaseHandoff, getExpiredHandoffs } = require('./utils/conversation-state');
 const { setSingleLabel, getCurrentLabel } = require('./utils/labels');
+const { getBotPowerState, saveBotPowerState } = require('./utils/bot-power');
 
 const app = express();
 const PORT = process.env.PORT || 3030;
@@ -37,6 +38,37 @@ app.get('/health', (req, res) => {
     status: 'ok', 
     bot: process.env.BOT_NAME,
     timestamp: new Date().toISOString()
+  });
+});
+
+// 🤖 API para control global del bot (Encendido/Apagado)
+app.get('/api/bot/status', (req, res) => {
+  const state = getBotPowerState();
+  res.json({
+    success: true,
+    ...state
+  });
+});
+
+app.post('/api/bot/status', (req, res) => {
+  const { enabled } = req.body;
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Se requiere el campo "enabled" con un valor booleano.' 
+    });
+  }
+  
+  const newState = { enabled };
+  saveBotPowerState(newState);
+  
+  const message = enabled ? 'Bot activado globalmente' : 'Bot desactivado globalmente';
+  console.log(`🤖 ${message.toUpperCase()}`);
+  
+  res.json({
+    success: true,
+    message,
+    ...newState
   });
 });
 
@@ -445,6 +477,9 @@ async function checkAndReleaseHandoffIfNoLabels(accountId, conversationId) {
 // ============================================================================
 
 async function checkHandoffTimeouts() {
+  const botPower = getBotPowerState();
+  if (!botPower.enabled) return;
+  
   const expired = getExpiredHandoffs(HANDOFF_TIMEOUT_MIN);
   if (expired.length === 0) return;
 
@@ -523,6 +558,13 @@ app.post('/webhook/chatwoot', async (req, res) => {
       await sendQRPaymentFlow(accountId, conversationId);
       await new Promise(resolve => setTimeout(resolve, 800));
       await sendBotMessage(accountId, conversationId, '\n\n¿Necesitas algo más? Escribe *menú* para ver opciones.');
+      return res.sendStatus(200);
+    }
+
+    // 🛑 CONTROL GLOBAL: Si el bot está apagado, no procesar el resto de keywords o menús
+    const botPower = getBotPowerState();
+    if (!botPower.enabled) {
+      console.log(`🚫 Bot desactivado globalmente - Omitiendo respuestas (excepto 'miranda')`);
       return res.sendStatus(200);
     }
 
