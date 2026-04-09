@@ -133,7 +133,7 @@ async function sendQRPaymentFlow(accountId, conversationId) {
     await new Promise(resolve => setTimeout(resolve, 800));
     
     // 🎵 Enviar audio de Miranda
-    //await sendAudioFile(accountId, conversationId);
+    await sendAudioFile(accountId, conversationId);
     
     await new Promise(resolve => setTimeout(resolve, 800));
     
@@ -164,7 +164,7 @@ async function sendQRPaymentFlow(accountId, conversationId) {
 }
 
 // 🎵 Función para enviar un archivo de audio local
-/* async function sendAudioFile(accountId, conversationId) {
+async function sendAudioFile(accountId, conversationId) {
   console.log(`🎵 [AUDIO] Iniciando envío de audio a conv ${conversationId}`);
   
   try {
@@ -221,7 +221,7 @@ async function sendQRPaymentFlow(accountId, conversationId) {
       console.error(`  - Mensaje: ${error.message}`);
     }
   }
-} */
+}
 
 // 🔥 Flujo de reclamos
 async function sendReclamosFlow(accountId, conversationId, contactId) {
