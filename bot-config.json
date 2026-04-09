@@ -87,8 +87,7 @@
       "caption": "📱 Escanea este QR para pagar tu pedido"
     },
     "mirandaAudio": {
-      "filename": "audio.mp3",
-      "caption": "🎵 Mensaje de voz de Miranda"
+      "filename": "audio.mp3"
     }
   }
 }
