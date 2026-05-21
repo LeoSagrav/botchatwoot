@@ -163,14 +163,103 @@ async function sendQRPaymentFlow(accountId, conversationId) {
   }
 }
 
-// 🎵 Función para enviar un archivo de audio local
-async function sendAudioFile(accountId, conversationId) {
-  console.log(`🎵 [AUDIO] Iniciando envío de audio a conv ${conversationId}`);
+// 🔥 Función para flujo Papaya
+async function sendPapayaFlow(accountId, conversationId) {
+  console.log(`🖼️ Enviando flujo Papaya a conv ${conversationId}`);
   
   try {
-    const audioConfig = botConfig.media?.mirandaAudio;
+    const qrConfig = botConfig.media?.qrPayment;
+    
+    if (!qrConfig?.url) {
+      console.error('❌ URL del QR no configurada');
+      return;
+    }
+
+    const cleanUrl = qrConfig.url.trim();
+
+    // 1. Enviar QR
+    try {
+      await axios.post(
+        `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+        {
+          content: qrConfig.caption || '📱 Código QR para pago',
+          message_type: 'outgoing',
+          private: false,
+          attachments: [{ remote_file_url: cleanUrl }]
+        },
+        {
+          headers: {
+            'api_access_token': process.env.CHATWOOT_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
+        }
+      );
+      console.log('✅ Imagen QR enviada correctamente');
+    } catch (imageError) {
+      console.error('⚠️ Error enviando imagen, intentando método alternativo...');
+      try {
+        const imageResponse = await axios.get(cleanUrl, { responseType: 'arraybuffer', timeout: 10000 });
+        const imageBuffer = Buffer.from(imageResponse.data);
+        const contentType = imageResponse.headers['content-type'] || 'image/jpeg';
+        const form = new FormData();
+        form.append('content', qrConfig.caption || '📱 Código QR para pago');
+        form.append('message_type', 'outgoing');
+        form.append('private', 'false');
+        form.append('attachments[]', imageBuffer, { filename: 'qr-miranda.jpg', contentType });
+        
+        await axios.post(
+          `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+          form,
+          { headers: { 'api_access_token': process.env.CHATWOOT_TOKEN, ...form.getHeaders() }, timeout: 15000 }
+        );
+        console.log('✅ Imagen QR enviada como archivo binario');
+      } catch (binaryError) {
+        console.error('❌ Error en método binario:', binaryError.message);
+        throw binaryError;
+      }
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, 800));
+    
+    // 2. Enviar mensaje de texto
+    await axios.post(
+      `${process.env.CHATWOOT_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+      { content: botConfig.messages.papayaPayment, message_type: 'outgoing', private: false },
+      { headers: { 'api_access_token': process.env.CHATWOOT_TOKEN, 'Content-Type': 'application/json' }, timeout: 10000 }
+    );
+    console.log('✅ Mensaje de texto papaya enviado');
+    
+    await new Promise(resolve => setTimeout(resolve, 800));
+    
+    // 3. Enviar audio papaya
+    await sendAudioFile(accountId, conversationId, 'papayaAudio');
+    
+    // 🏷️ Etiquetar como 'bot'
+    await setSingleLabel(accountId, conversationId, 'bot');
+    
+  } catch (error) {
+    console.error('❌ Error enviando Papaya payment:', error.message);
+    console.log('⚠️ Fallback: Enviando solo texto con link al QR...');
+    try {
+      const fallbackMessage = `📱 Escanea este QR para pagar tu pedido\n\n🔗 ${botConfig.media?.qrPayment?.url?.trim()}\n\n${botConfig.messages.papayaPayment}`;
+      await sendMessage(accountId, conversationId, fallbackMessage);
+      await setSingleLabel(accountId, conversationId, 'bot');
+      console.log('✅ Fallback papaya enviado correctamente');
+    } catch (fallbackError) {
+      console.error('❌ Error en fallback papaya:', fallbackError.message);
+    }
+  }
+}
+
+// 🎵 Función para enviar un archivo de audio local
+async function sendAudioFile(accountId, conversationId, audioKey = 'mirandaAudio') {
+  console.log(`🎵 [AUDIO] Iniciando envío de audio a conv ${conversationId} - key: ${audioKey}`);
+  
+  try {
+    const audioConfig = botConfig.media?.[audioKey];
     if (!audioConfig?.filename) {
-      console.error('❌ [AUDIO] Nombre de archivo de audio no configurado en bot-config.json');
+      console.error(`❌ [AUDIO] Nombre de archivo de audio no configurado para ${audioKey}`);
       return;
     }
 
@@ -621,6 +710,15 @@ app.post('/webhook/chatwoot', async (req, res) => {
     if (cleanContent === 'miranda') {
       console.log('✅ "miranda" exacto detectado - Ejecutando QR payment (bypass handoff)');
       await sendQRPaymentFlow(accountId, conversationId);
+      await new Promise(resolve => setTimeout(resolve, 800));
+      await sendBotMessage(accountId, conversationId, '\n\n¿Necesitas algo más? Escribe *menú* para ver opciones.');
+      return res.sendStatus(200);
+    }
+
+    // 🔥 PRIORIDAD MÁXIMA: "papaya" EXACTO (bypass handoff)
+    if (cleanContent === 'papaya') {
+      console.log('✅ "papaya" exacto detectado - Ejecutando flujo papaya (bypass handoff)');
+      await sendPapayaFlow(accountId, conversationId);
       await new Promise(resolve => setTimeout(resolve, 800));
       await sendBotMessage(accountId, conversationId, '\n\n¿Necesitas algo más? Escribe *menú* para ver opciones.');
       return res.sendStatus(200);
